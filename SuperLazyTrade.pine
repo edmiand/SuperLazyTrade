@@ -1306,35 +1306,8 @@ add_result(array<bool> arr, bool is_win, int max_size) =>
 
 // Only track if enabled
 if enableSuccessRate
-    // Process BUY success tracking BEFORE updating signal states
-    if signal_buy
-        // Check if we need to capture result from previous BUY signal
-        if not resultCaptured_buy and not na(buy_entry_for_success)
-            // Calculate P&L from last BUY entry
-            float buy_pnl = ((close - buy_entry_for_success) / buy_entry_for_success) * 100
-            
-            // Add result to tracking array
-            buy_results := add_result(buy_results, buy_pnl > 0, maxSignalsToTrack)
-        
-        // Reset for new BUY entry
-        buy_entry_for_success := close
-        resultCaptured_buy := false
-
-    // Process SELL success tracking BEFORE updating signal states
-    if signal_sell
-        // Check if we need to capture result from previous SELL signal
-        if not resultCaptured_sell and not na(sell_entry_for_success)
-            // Calculate P&L from last SELL entry (inverted for shorts)
-            float sell_pnl = ((sell_entry_for_success - close) / sell_entry_for_success) * 100
-            
-            // Add result to tracking array
-            sell_results := add_result(sell_results, sell_pnl > 0, maxSignalsToTrack)
-        
-        // Reset for new SELL entry
-        sell_entry_for_success := close
-        resultCaptured_sell := false
-
-    // Capture PROFIT/LOSS exits for BUY positions
+    // Capture PROFIT/LOSS exits FIRST so the guard stays set when a new signal
+    // fires on the same bar, preventing the new-signal block from double-counting.
     if signal_profit and pnl_direction == "BUY" and not resultCaptured_buy
         buy_results := add_result(buy_results, true, maxSignalsToTrack)  // PROFIT = Win
         resultCaptured_buy := true
@@ -1351,6 +1324,26 @@ if enableSuccessRate
     if signal_loss and pnl_direction == "SELL" and not resultCaptured_sell
         sell_results := add_result(sell_results, false, maxSignalsToTrack)  // LOSS = Loss
         resultCaptured_sell := true
+
+    // Process BUY success tracking: if exit already captured above, guard blocks double-count
+    if signal_buy
+        if not resultCaptured_buy and not na(buy_entry_for_success)
+            float buy_pnl = ((close - buy_entry_for_success) / buy_entry_for_success) * 100
+            buy_results := add_result(buy_results, buy_pnl > 0, maxSignalsToTrack)
+
+        // Reset for new BUY entry
+        buy_entry_for_success := close
+        resultCaptured_buy := false
+
+    // Process SELL success tracking: if exit already captured above, guard blocks double-count
+    if signal_sell
+        if not resultCaptured_sell and not na(sell_entry_for_success)
+            float sell_pnl = ((sell_entry_for_success - close) / sell_entry_for_success) * 100
+            sell_results := add_result(sell_results, sell_pnl > 0, maxSignalsToTrack)
+
+        // Reset for new SELL entry
+        sell_entry_for_success := close
+        resultCaptured_sell := false
 
 //======================================================================
 // UPDATE SIGNAL P&L TRACKING (INDEPENDENT SYSTEM)
@@ -1410,14 +1403,15 @@ else if is_first_signal_mode
     // Same direction: Keep original entry
     else
         if signal_buy and pnl_direction == "BUY"
-            // Don't reset entry price - keep tracking from first BUY
-            // Exit flag stays as-is (if fired, stays fired)
+            // Keep original entry price for full-run tracking, but re-arm exit
+            // so the continued position can generate new PROFIT/LOSS signals
             pnl_direction := "BUY"
-            
+            pnl_exit_fired := false
+
         else if signal_sell and pnl_direction == "SELL"
-            // Don't reset entry price - keep tracking from first SELL
-            // Exit flag stays as-is (if fired, stays fired)
+            // Keep original entry price for full-run tracking, but re-arm exit
             pnl_direction := "SELL"
+            pnl_exit_fired := false
             
         // First signal in this direction
         else if signal_buy and pnl_direction != "BUY"
