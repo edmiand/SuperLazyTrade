@@ -1,7 +1,7 @@
 //@version=6
 
 // Version
-string VERSION = "V49A"
+string VERSION = "V49B"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey
@@ -277,6 +277,7 @@ const int STRETCH_EXTREME_PENALTY = 20    // High extension risk
 const int FUEL_PENALTY = 25
 const int SQUEEZE_PENALTY = 30
 const int LIQUIDITY_PENALTY = 25
+const int HTF_PENALTY = 20
 
 // DASHBOARD
 const string DASH_WIDTH = "                                        "
@@ -462,6 +463,20 @@ gateOn = input.bool(false, "Enable Risk Gates", group = grp_sig,
                "3. ATR Fuel: -25 when daily range >85% of ATR(14)\n" +
                "4. Liquidity: -25 when RVOL<0.8 AND ADX choppy\n\n" +
                "NOTE: Breakout bonus moved to Component 5 (always active)")
+
+grp_htf = "📡 HTF Trend Filter"
+htfEnabled = input.bool(true, "Enable HTF Filter", group = grp_htf,
+     tooltip = "Penalizes signals that trade against the higher timeframe trend.\n\n" +
+               "When ON: signals counter to HTF EMA9/20 direction receive a -20 penalty\n" +
+               "Works in both Advisory and Enforcement gate modes.\n\n" +
+               "Example (15-min filter):\n" +
+               "• 15-min EMA9 < EMA20 (bearish) + 2-min BUY signal → -20 applied\n" +
+               "• 15-min EMA9 > EMA20 (bullish) + 2-min BUY signal → no penalty")
+
+htfTimeframe = input.string("15", "HTF Timeframe", options = ["5", "15"], group = grp_htf,
+     tooltip = "Higher timeframe to check trend direction against.\n\n" +
+               "5-min: Faster filter, adapts sooner to trend changes\n" +
+               "15-min: Stronger filter, better at cutting counter-trend noise")
 
 grp_pnl = "💰 P&L Exit Signals"
 enablePnL = input.bool(true, "Enable P&L Exit Signals", group = grp_pnl,
@@ -654,6 +669,12 @@ bool adx_rising_2 = ta.rising(adx, 2)  // 2-bar: Setup Score ADX component
 // Relative Volume
 vol_ma20 = ta.sma(volume, 20)
 rel_vol = vol_ma20 > 0 ? volume / vol_ma20 : 1.0
+
+// V49B: Higher Timeframe trend direction (non-repainting via lookahead_off)
+float htf_ema9  = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 9),  lookahead = barmerge.lookahead_off)
+float htf_ema20 = request.security(syminfo.tickerid, htfTimeframe, ta.ema(close, 20), lookahead = barmerge.lookahead_off)
+bool htf_is_bull = htf_ema9 > htf_ema20
+bool htf_is_bear = htf_ema9 < htf_ema20
 
 //======================================================================
 // TREND EXTENSION TRACKING
@@ -1037,11 +1058,11 @@ bool gate1_squeeze = is_squeezing
 // Calculate trend stretch (move since flip)
 float trend_move = not na(trend_start_price) ? 
                    math.abs(close - trend_start_price) : 0.0
-float trend_stretch = atr_14 > 0 ? trend_move / atr_14 : 0.0
+// V49B: Use intraday ATR for both components so the scales are comparable
+float trend_stretch = atr > 0 ? trend_move / atr : 0.0
 
 // Unified Stretch Factor = MAX(EMA stretch, Trend stretch)
-// Uses daily ATR for trend stretch, intraday ATR for EMA stretch
-// This captures whichever extension is more severe
+// Both normalized by intraday ATR(14) — comparable units
 float stretch_factor = math.max(ema_stretch, trend_stretch)
 
 // Tiered stretch assessment (profile-adaptive via ext_scale)
@@ -1071,12 +1092,19 @@ bool gate3_fuel = fuel_exhausted and not is_high_velocity
 bool gate4_liquidity = volume_is_dead and is_choppy
 
 //----------------------------------------------------------------------
+// Gate 5: HTF Counter-Trend (V49B)
+// Fires when signal direction opposes the higher timeframe EMA9/20 trend
+//----------------------------------------------------------------------
+bool gate5_htf = htfEnabled and ((is_bull and htf_is_bear) or (is_bear and htf_is_bull))
+
+//----------------------------------------------------------------------
 // Calculate penalty values (for display and application)
 //----------------------------------------------------------------------
 int gate1_penalty = gate1_squeeze ? SQUEEZE_PENALTY : 0
 int gate2_penalty = stretch_penalty  // Tiered stretch penalty
 int gate3_penalty = gate3_fuel ? FUEL_PENALTY : 0
 int gate4_penalty = gate4_liquidity ? LIQUIDITY_PENALTY : 0
+int gate5_penalty = gate5_htf ? HTF_PENALTY : 0
 
 // Build gate message (always visible regardless of gateOn setting)
 string gate_message = ""
@@ -1085,7 +1113,6 @@ if gate1_squeeze
     gate_message += "🚧 SQUEEZE (-" + str.tostring(gate1_penalty) + ") "
 
 if gate2_stretched
-    // Show stretch details with ATR measurement
     string stretch_detail = str.tostring(stretch_factor, "#.#") + " ATR"
     gate_message += stretch_status + " (-" + str.tostring(gate2_penalty) + " | " + stretch_detail + ") "
 
@@ -1095,33 +1122,40 @@ if gate3_fuel
 if gate4_liquidity
     gate_message += "🚫 LIQUIDITY (-" + str.tostring(gate4_penalty) + ") "
 
+if gate5_htf
+    gate_message += "📡 HTF " + htfTimeframe + "m COUNTER (-" + str.tostring(gate5_penalty) + ") "
+
 
 //======================================================================
-// RISK GATES - APPLY GATES 1-4 TO FINAL SCORE (ENFORCEMENT MODE ONLY)
+// RISK GATES - APPLY GATES 1-5 TO FINAL SCORE (ENFORCEMENT MODE ONLY)
 //======================================================================
-// V48B: 4 gates total (all enforced when gateOn = true)
-// Gate 5 (Breakout) moved to Component 5C
+// V48B: Gates 1-4 (pure risk filters)
+// V49B: Gate 5 — HTF counter-trend filter
 //======================================================================
 int final_score = raw_score
 
 if gateOn
-    // ENFORCEMENT MODE: Actually apply penalties/bonuses  
+    // ENFORCEMENT MODE: Apply all penalties
 
     // Gate 1: Squeeze (Low Volatility / Range Bound)
     if gate1_squeeze
         final_score := final_score - gate1_penalty
-    
+
     // Gate 2: Stretch Factor (Unified - Mean Reversion + Trend Exhaustion)
     if gate2_stretched
         final_score := math.max(final_score - gate2_penalty, 0)
-    
+
     // Gate 3: Volatility Fuel Exhaustion (Session Range Maxed)
     if gate3_fuel
         final_score := math.max(final_score - FUEL_PENALTY, 0)
-    
+
     // Gate 4: Liquidity & Strength Circuit Breaker
     if gate4_liquidity
         final_score := final_score - gate4_penalty
+
+    // Gate 5: HTF Counter-Trend
+    if gate5_htf
+        final_score := math.max(final_score - gate5_penalty, 0)
 
 // Final Safety Clamp
 final_score := math.max(math.min(final_score, 100), 0)
@@ -1618,6 +1652,8 @@ if showDash and barstate.islast
         active_gate_count += 1
     if gate4_liquidity
         active_gate_count += 1
+    if gate5_htf
+        active_gate_count += 1
     
     var table d = table.new(position.bottom_right, 2, DASHBOARD_MAX_ROWS, 
          bgcolor = color.new(color.black, 0), border_width = 1)
@@ -1661,6 +1697,15 @@ if showDash and barstate.islast
     table.cell(d, 0, row, "Signal Anchor", text_color = color.white, text_halign = text.align_left, text_size = size.small)
     table.cell(d, 1, row, anchor_display, text_color = color.gray, text_size = size.small)
     row += 1
+
+    // V49B: HTF Trend
+    if htfEnabled
+        string htf_label = "HTF " + htfTimeframe + "m"
+        string htf_display = htf_is_bull ? "BULLISH 🔼" : htf_is_bear ? "BEARISH 🔽" : "NEUTRAL"
+        color htf_color = gate5_htf ? color.orange : color.lime
+        table.cell(d, 0, row, htf_label, text_color = color.white, text_halign = text.align_left, text_size = size.small)
+        table.cell(d, 1, row, htf_display + (gate5_htf ? " ⚠️ COUNTER" : " ✅ ALIGNED"), text_color = htf_color, text_size = size.small)
+        row += 1
 
     // Market Regime
     string m_state = is_squeezing ? "SQUEEZING 🚧" : 
