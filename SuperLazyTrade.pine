@@ -451,24 +451,11 @@ minScoreBuy= input.int(50, "Min Score for BUY Signal", minval = 0, maxval = 70, 
 minScoreSell= input.int(50, "Min Score for SELL Signal", minval = 0, maxval = 70, group = grp_sig,
      tooltip = "Minimum score required for SELL label (Score mode only)\nMax 70 to allow ⭐⭐⭐ EXCELLENT rating (threshold + 30)")
 
-useSessionFilter = input.bool(true, "RTH Session Filter", group = grp_sig,
-     tooltip = "Only fire signals during regular trading hours (RTH).\n\n" +
-               "When ON: Signals are suppressed outside the session window.\n" +
-               "State (b_fired/s_fired) resets at session open so the first\n" +
-               "RTH bar can fire freely without carryover from overnight.\n\n" +
-               "Default: 9:30 AM – 4:00 PM ET, Mon–Fri\n" +
-               "Customize via 'Session Window' input below.\n\n" +
-               "Futures / Crypto users: set the session to match your contract\n" +
-               "(e.g. '1800-1700:23456' for CME equity futures)")
-
-sessionWindow = input.string("0930-1600:23456", "Session Window", group = grp_sig,
-     tooltip = "TradingView session string for RTH filter.\n\n" +
-               "Format: 'HHMM-HHMM:DDDDDDD' (days: 1=Sun … 7=Sat)\n" +
-               "Examples:\n" +
-               "• Stocks/ETFs: '0930-1600:23456'\n" +
-               "• CME Futures: '1800-1700:23456'\n" +
-               "• 24/7 Crypto: '0000-0000:1234567'\n\n" +
-               "Only used when RTH Session Filter is ON.")
+useSessionFilter = input.bool(true, "RTH Session Filter (9:30–4:00 PM ET)", group = grp_sig,
+     tooltip = "Only fire signals during regular trading hours (9:30 AM – 4:00 PM ET, Mon–Fri).\n\n" +
+               "When ON: Signals are suppressed outside market hours.\n" +
+               "State resets at session open so the first RTH bar can fire\n" +
+               "freely without carryover from overnight.")
 
 gateOn = input.bool(false, "Enable Risk Gates", group = grp_sig,
      tooltip = "ENFORCEMENT MODE (ON): Gates apply penalties to score\n" +
@@ -1300,8 +1287,8 @@ var bool b_fired = false
 var bool s_fired = false
 
 // RTH session filter: true when current bar is inside the configured session window
-bool in_session       = not useSessionFilter or not na(time(timeframe.period, sessionWindow))
-bool prev_in_session  = not na(time(timeframe.period, sessionWindow)[1])
+bool in_session       = not useSessionFilter or not na(time(timeframe.period, "0930-1600:23456"))
+bool prev_in_session  = not na(time(timeframe.period, "0930-1600:23456")[1])
 
 // Reset fired flags at session open so first RTH bar fires without overnight carryover
 bool session_just_opened = useSessionFilter and in_session and not prev_in_session
