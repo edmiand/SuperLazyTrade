@@ -1,7 +1,7 @@
 //@version=6
 
 // Version
-string VERSION = "V49B"
+string VERSION = "V50"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey

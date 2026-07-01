@@ -1,25 +1,17 @@
-# SuperLazyTrade V49B
+# SuperLazyTrade V50
 
 **Systematic Intraday Momentum Trading Indicator for TradingView**  
 *Pine Script v6 | By @dmandrey | February 2026*
 
 ---
 
-## What's New in V49B
+## What's New in V50
 
-**Stretch factor fix + Higher Timeframe (HTF) trend filter**
+**RTH Session Filter**
 
-- Fixed stretch_factor: trend exhaustion now uses intraday ATR (was daily ATR, making it effectively dead)
-- New Gate 5: HTF Trend Filter — penalizes signals that trade against the 5-min or 15-min EMA9/20 trend
-- HTF filter is -20 pts in enforcement mode, warning-only in advisory mode
-- Dashboard shows HTF direction row (ALIGNED ✅ or COUNTER ⚠️)
-
-**V49A: User-selectable EMA slow period (20 or 30) for EMA Cross anchor**
-
-- EMA 9/20 (default): Responsive, 5-10 signals/session — best for NVDA, TSLA
-- EMA 9/30 (smoother): More selective, 3-7 signals/session — best for SOXX, SPY, QQQ
-- Dashboard auto-displays active pair (e.g., `EMA Cross (9/30)`)
-- Easy A/B testing without code changes
+- Signals are now suppressed outside Regular Trading Hours (9:30–4:00 PM ET)
+- Session window is hard-coded; no user input needed — pre/post-market noise is automatically filtered
+- Applies to all signal types (BUY, SELL, PROFIT, LOSS)
 
 ---
 
@@ -138,6 +130,7 @@ SuperTrend ATR length and factor also auto-select per asset type in AUTO mode.
 
 ## Version History
 
+- **V50** (2026-07-01): Hard-coded RTH session filter (9:30–4:00 PM ET); suppresses pre/post-market signals
 - **V49B** (2026-02-06): Fixed stretch_factor ATR scale mismatch; added HTF Trend Filter (Gate 5)
 - **V49A** (2026-02-06): User-selectable EMA slow period (20 or 30)
 - **V48I** (2026-02-05): Continuous EMA9 line (no gaps between trend segments)
