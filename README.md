@@ -1,4 +1,4 @@
-# SuperLazyTrade V51F
+# SuperLazyTrade V51G
 
 **Systematic Intraday Momentum Trading Indicator for TradingView**
 *Pine Script v6 | By @dmandrey*
@@ -7,12 +7,11 @@
 
 ## What's New in V51
 
-The V51 series was a design-review pass. Each phase defaults to the exact V50 behavior (opt-in via a new input) except where noted. (Phase 4, Time-of-Day Filters, was added and later removed as low-value — see Version History.)
+The V51 series was a design-review pass. Each phase defaults to the exact V50 behavior (opt-in via a new input) except where noted. Two phases were later reverted after live testing found no value: Phase 4 (Time-of-Day Filters) and Phase 5 (HTF Counter-Trend, which also removed the older V49B HTF Gate 5 it built on) — see Version History.
 
 - **V51A — Time-of-Day Relative Volume:** `rvolMode` (default `Time-of-Day`) compares each bar's volume to the same bar-slot's average across prior sessions, removing the open/lunch volume-shape bias a trailing SMA has. Falls back to the legacy Rolling 20-bar method automatically when session history is thin.
 - **V51B — ATR-Based Exits + Time Stop:** `exitMode` (default `Fixed %`, preserves V50) adds an `ATR-Based` alternative — stop/target frozen at entry as a multiple of intraday ATR. Independent `useTimeStop`/`timeStopBars` (default off) forces an exit after N bars with the real P&L sign recorded as win/loss.
 - **V51C — Split Exit vs Reversal Win-Rate:** Success tracking is split into `*_exit_results` (target/stop/time-stop) and `*_reversal_results` (closed by an opposite signal) so the win rate no longer mixes two incompatible outcome definitions.
-- **V51E — HTF Counter-Trend: Penalty → Optional Veto:** `htfMode` (default `Penalty (-20)`, preserves V50 Gate 5) adds a `Hard Veto` option that unconditionally blocks a counter-HTF signal regardless of `gateOn` or score.
 - **V51F — Entry Freshness Constraint:** `maxBarsFromFlip` (default 0 = disabled) constrains Score-mode entries to fire only within N bars of the most recent anchor flip. Trend mode is unaffected (it fires on the flip bar by construction).
 
 ---
@@ -39,11 +38,9 @@ Raw scores are capped at 100. EMA and VWAP weights vary by asset profile so all 
 | 2. Stretch Factor | −10/−20 | Price extended from EMA20 or flip price |
 | 3. ATR Fuel | −25 | Session range > profile limit % of daily ATR |
 | 4. Liquidity | −25 | RVOL low AND ADX choppy |
-| 5. HTF Counter-Trend | −20 or hard block | HTF EMA9/20 opposes signal direction; `htfMode` selects Penalty vs Hard Veto (V51E) |
 
 **Gates OFF (default/recommended):** Warnings display in dashboard but do not affect score.
 **Gates ON:** Penalties subtracted from final score before signal generation.
-**Hard Veto** (Gate 5 only) blocks signals unconditionally, independent of `gateOn`.
 
 ### Signal Anchors
 
@@ -70,7 +67,6 @@ Raw scores are capped at 100. EMA and VWAP weights vary by asset profile so all 
 - **Risk Gates:** OFF
 - **Relative Volume Mode:** Time-of-Day (default)
 - **Exit Mode:** Fixed % (default) or ATR-Based
-- **HTF Counter-Trend Mode:** Penalty (default) or Hard Veto
 - **Max Bars From Flip:** 0 (disabled by default; Score mode only)
 
 ---
@@ -132,7 +128,7 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 
 ## Key Design Decisions
 
-**Non-repainting:** All signals confirmed on `barstate.isconfirmed`. HTF EMAs and daily ATR use `lookahead_off` — display rows can flicker intrabar but no signal ever repaints.
+**Non-repainting:** All signals confirmed on `barstate.isconfirmed`. Daily ATR uses `lookahead_off` — display can flicker intrabar but no signal ever repaints.
 
 **Dual-anchor unification:** After anchor selection, all downstream logic uses `is_bull`/`is_bear`/`trendUp`/`trendDown`. The EMA slow period affects cross detection only — Component 1 always scores against EMA20.
 
@@ -142,22 +138,21 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 
 **Time-of-Day RVOL (V51A):** Removes the U-shaped intraday volume bias of a trailing SMA by comparing each bar to the historical average for its own bar-slot.
 
-**HTF Penalty vs Veto (V51E):** Penalty mode lets a high-scoring counter-HTF setup still fire; Hard Veto blocks it outright, independent of `gateOn` and score. Exits are never affected by either mode.
-
 **Entry freshness (V51F):** `maxBarsFromFlip` (Score mode only) prevents chasing a trend long after the flip that triggered it.
 
 ---
 
 ## Version History
 
+- **V51G** (2026-08): HTF Counter-Trend filter removed entirely (Gate 5, input group, dashboard row) — no observable difference in signal behavior found in testing; risk gates back to 4
 - **V51F** (2026-08): Entry Freshness Constraint — `maxBarsFromFlip` limits Score-mode entries to N bars after an anchor flip
-- **V51E** (2026-08): HTF Counter-Trend Penalty → optional Hard Veto (`htfMode`)
+- **V51E** (2026-08): HTF Counter-Trend Penalty → optional Hard Veto (`htfMode`) — *removed in V51G*
 - **V51D** (2026-08): Time-of-Day Filters — added, then removed as low-value (no `⏰` block-open/lunch/cutoff inputs remain)
 - **V51C** (2026-08): Split Exit vs Reversal win-rate tracking
 - **V51B** (2026-08): ATR-Based Exits + Time Stop
 - **V51A** (2026-08): Time-of-Day Relative Volume
 - **V50**: Hard-coded RTH session filter (9:30–4:00 PM ET); dashboard/gate bug fixes
-- **V49B**: Fixed stretch_factor ATR scale mismatch; added HTF Trend Filter (Gate 5)
+- **V49B**: Fixed stretch_factor ATR scale mismatch; added HTF Trend Filter (Gate 5) — *removed in V51G*
 - **V49A**: User-selectable EMA slow period (20 or 30)
 - **V48I**: Continuous EMA9 line (no gaps between trend segments)
 - **V48H**: EMA Cross mode signal blocking fix; anchor-aware label positioning
