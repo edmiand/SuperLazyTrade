@@ -5,14 +5,13 @@
 
 ---
 
-## What's New in V51 (Phases A–F)
+## What's New in V51
 
-The V51 series was a six-phase design-review pass. Each phase defaults to the exact V50 behavior (opt-in via a new input) except where noted:
+The V51 series was a design-review pass. Each phase defaults to the exact V50 behavior (opt-in via a new input) except where noted. (Phase 4, Time-of-Day Filters, was added and later removed as low-value — see Version History.)
 
 - **V51A — Time-of-Day Relative Volume:** `rvolMode` (default `Time-of-Day`) compares each bar's volume to the same bar-slot's average across prior sessions, removing the open/lunch volume-shape bias a trailing SMA has. Falls back to the legacy Rolling 20-bar method automatically when session history is thin.
 - **V51B — ATR-Based Exits + Time Stop:** `exitMode` (default `Fixed %`, preserves V50) adds an `ATR-Based` alternative — stop/target frozen at entry as a multiple of intraday ATR. Independent `useTimeStop`/`timeStopBars` (default off) forces an exit after N bars with the real P&L sign recorded as win/loss.
 - **V51C — Split Exit vs Reversal Win-Rate:** Success tracking is split into `*_exit_results` (target/stop/time-stop) and `*_reversal_results` (closed by an opposite signal) so the win rate no longer mixes two incompatible outcome definitions.
-- **V51D — Time-of-Day Filters:** Three independent, default-off filters (block first N minutes after open, block lunch window, no-new-entries-after cutoff) suppress only new BUY/SELL signals — never exits.
 - **V51E — HTF Counter-Trend: Penalty → Optional Veto:** `htfMode` (default `Penalty (-20)`, preserves V50 Gate 5) adds a `Hard Veto` option that unconditionally blocks a counter-HTF signal regardless of `gateOn` or score.
 - **V51F — Entry Freshness Constraint:** `maxBarsFromFlip` (default 0 = disabled) constrains Score-mode entries to fire only within N bars of the most recent anchor flip. Trend mode is unaffected (it fires on the flip bar by construction).
 
@@ -117,7 +116,6 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 - Two-loss rule per instrument per day
 - Close all positions by 15:45 EST (no overnight holds)
 - Rotate instruments if conditions deteriorate
-- Optional Time-of-Day Filters (V51D) can block entries around the open, lunch, or after a cutoff time — exits are never blocked
 
 ### P&L Tracking Modes
 - **Last Signal (default):** Entry resets on every new BUY/SELL — tracks per-signal P&L
@@ -154,7 +152,7 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 
 - **V51F** (2026-08): Entry Freshness Constraint — `maxBarsFromFlip` limits Score-mode entries to N bars after an anchor flip
 - **V51E** (2026-08): HTF Counter-Trend Penalty → optional Hard Veto (`htfMode`)
-- **V51D** (2026-08): Time-of-Day Filters — block-open, block-lunch, no-new-entries-after cutoff
+- **V51D** (2026-08): Time-of-Day Filters — added, then removed as low-value (no `⏰` block-open/lunch/cutoff inputs remain)
 - **V51C** (2026-08): Split Exit vs Reversal win-rate tracking
 - **V51B** (2026-08): ATR-Based Exits + Time Stop
 - **V51A** (2026-08): Time-of-Day Relative Volume
@@ -179,7 +177,7 @@ See `CLAUDE.md` for full architectural detail, gotchas, and the compile-check ch
 ## Notes
 
 - TradingView Pro plan or higher required for 2-minute charts
-- Designed for US market hours (9:30–16:00 EST); the RTH filter and Time-of-Day Filters are ET-hardcoded — disable them for crypto or 24h futures
+- Designed for US market hours (9:30–16:00 EST); the RTH filter is ET-hardcoded — disable it for crypto or 24h futures
 - Educational reference only — no guarantee of trading results
 - Test thoroughly on paper before live trading
 

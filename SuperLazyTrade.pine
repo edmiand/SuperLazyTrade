@@ -38,7 +38,7 @@ indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 //     flip event.
 //   - `entry_is_fresh = maxBarsFromFlip <= 0 or bars_since_flip <=
 //     maxBarsFromFlip`, AND'd into signal_buy/signal_sell in the Score-
-//     mode branch only (same pattern as V51D/V51E's independent AND'd
+//     mode branch only (same pattern as V51E's independent AND'd
 //     conditions).
 //   - DASHBOARD_MAX_ROWS raised 27 -> 28 for the new Extended Metrics
 //     row — verified by hand-tracing every row increment in the worst
@@ -328,43 +328,6 @@ htfMode = input.string("Penalty (-20)", "HTF Counter-Trend Mode", options = ["Pe
                "  never fire, regardless of score or 'Enable Risk Gates'\n" +
                "• Existing positions can still exit via PROFIT/LOSS/TIME STOP\n" +
                "• Dashboard HTF row shows ⛔ VETO instead of ⚠️ COUNTER when blocking")
-
-//======================================================================
-// V51D: TIME-OF-DAY FILTERS
-//======================================================================
-// All default OFF — preserve exact V50/V51A-C signal timing until the
-// user opts in. Uses the same ET session-string mechanism as the RTH
-// filter (useSessionFilter) — same caveat: hardcoded ET, not appropriate
-// for crypto / 24h futures without user awareness.
-grp_time = "⏰ Time-of-Day Filters"
-
-useBlockOpen = input.bool(false, "Block First N Minutes After Open", group = grp_time,
-     tooltip = "Suppress new BUY/SELL signals for the first N minutes after\n" +
-               "9:30 AM ET. Does NOT affect PROFIT/LOSS/TIME STOP exits.\n\n" +
-               "ET-hardcoded — same caveat as the RTH Session Filter.")
-
-blockOpenMinutes = input.int(5, "Minutes to Block", minval = 0, maxval = 15, group = grp_time,
-     tooltip = "Only used when 'Block First N Minutes After Open' = true")
-
-blockLunch = input.bool(false, "Block Lunch Session", group = grp_time,
-     tooltip = "Suppress new BUY/SELL signals between 'Lunch Start' and\n" +
-               "'Lunch End' (ET). Does NOT affect PROFIT/LOSS/TIME STOP exits.\n\n" +
-               "ET-hardcoded — same caveat as the RTH Session Filter.")
-
-lunchStart = input.string("1130", "Lunch Start (HHMM ET)", group = grp_time,
-     tooltip = "24-hour HHMM format, e.g. 1130 = 11:30 AM ET.\nOnly used when 'Block Lunch Session' = true")
-
-lunchEnd = input.string("1330", "Lunch End (HHMM ET)", group = grp_time,
-     tooltip = "24-hour HHMM format, e.g. 1330 = 1:30 PM ET.\nOnly used when 'Block Lunch Session' = true")
-
-useNoNewEntriesAfter = input.bool(false, "Block New Entries After Time", group = grp_time,
-     tooltip = "Suppress new BUY/SELL signals at/after 'No New Entries After'\n" +
-               "(ET), for the remainder of that trading day. Existing positions\n" +
-               "can still exit via PROFIT/LOSS/TIME STOP — only new entries are blocked.\n\n" +
-               "ET-hardcoded — same caveat as the RTH Session Filter.")
-
-noNewEntriesAfter = input.string("1550", "No New Entries After (HHMM ET)", group = grp_time,
-     tooltip = "24-hour HHMM format, e.g. 1550 = 3:50 PM ET.\nOnly used when 'Block New Entries After Time' = true")
 
 grp_pnl = "💰 P&L Exit Signals"
 enablePnL = input.bool(true, "Enable P&L Exit Signals", group = grp_pnl,
@@ -1082,27 +1045,6 @@ int gate3_penalty = gate3_fuel ? FUEL_PENALTY : 0
 int gate4_penalty = gate4_liquidity ? LIQUIDITY_PENALTY : 0
 int gate5_penalty = gate5_htf ? HTF_PENALTY : 0
 
-//======================================================================
-// V51D: TIME-OF-DAY FILTER STATE
-//======================================================================
-// Informational/hard-block state — NOT scored gates (no point penalty,
-// not counted in active_gate_count). Reuses the same time()/session-
-// string mechanism as the RTH filter (useSessionFilter).
-minutes_to_hhmm(int total_minutes) =>
-    int h = total_minutes / 60
-    int m = total_minutes % 60
-    string hh = h < 10 ? "0" + str.tostring(h) : str.tostring(h)
-    string mm = m < 10 ? "0" + str.tostring(m) : str.tostring(m)
-    hh + mm
-
-string open_block_end_str = minutes_to_hhmm(570 + blockOpenMinutes)  // 570 min = 9:30 AM
-bool in_open_block = useBlockOpen and blockOpenMinutes > 0 and
-     not na(time(timeframe.period, "0930-" + open_block_end_str + ":23456"))
-
-bool in_lunch_block = blockLunch and not na(time(timeframe.period, lunchStart + "-" + lunchEnd + ":23456"))
-
-bool in_late_cutoff = useNoNewEntriesAfter and not na(time(timeframe.period, noNewEntriesAfter + "-2359:23456"))
-
 // Build gate message (always visible regardless of gateOn setting)
 string gate_message = ""
 
@@ -1121,15 +1063,6 @@ if gate4_liquidity
 
 if gate5_htf
     gate_message += "📡 HTF " + htfTimeframe + "m COUNTER (-" + str.tostring(gate5_penalty) + ") "
-
-if in_open_block
-    gate_message += "⏰ OPEN BLOCK "
-
-if in_lunch_block
-    gate_message += "⏰ LUNCH BLOCK "
-
-if in_late_cutoff
-    gate_message += "⏰ LATE CUTOFF "
 
 
 //======================================================================
@@ -1337,11 +1270,6 @@ if is_bear and not is_bear[1]
 bool signal_buy = false
 bool signal_sell = false
 
-// V51D: Time-of-day filters apply to NEW entries only (signal_buy/signal_sell) —
-// PROFIT/LOSS/TIME STOP exits (signal_profit/signal_loss/signal_time_stop) are
-// computed independently earlier in the script and are never touched by these.
-bool time_filters_ok = not in_open_block and not in_lunch_block and not in_late_cutoff
-
 // V51E: HTF Hard Veto blocks new entries outright — independent of gateOn and
 // independent of score. Only applies when htfMode = "Hard Veto"; in the default
 // "Penalty (-20)" mode this is always false and behavior is unchanged from V50.
@@ -1355,16 +1283,16 @@ bool entry_is_fresh = maxBarsFromFlip <= 0 or bars_since_flip <= maxBarsFromFlip
 
 if sigTime == "Trend"
     // Fire at anchor flip + quality check
-    signal_buy  := in_session and time_filters_ok and not htf_veto_block and trendUp and passes_quality_filter(final_score, minScoreBuy)
-    signal_sell := in_session and time_filters_ok and not htf_veto_block and trendDown and passes_quality_filter(final_score, minScoreSell)
+    signal_buy  := in_session and not htf_veto_block and trendUp and passes_quality_filter(final_score, minScoreBuy)
+    signal_sell := in_session and not htf_veto_block and trendDown and passes_quality_filter(final_score, minScoreSell)
 
 else  // "Score" mode
     // Fire when score crosses threshold
-    signal_buy  := in_session and time_filters_ok and not htf_veto_block and entry_is_fresh and barstate.isconfirmed and is_bull and
+    signal_buy  := in_session and not htf_veto_block and entry_is_fresh and barstate.isconfirmed and is_bull and
                    passes_quality_filter(final_score, minScoreBuy) and
                    not b_fired
 
-    signal_sell := in_session and time_filters_ok and not htf_veto_block and entry_is_fresh and barstate.isconfirmed and is_bear and
+    signal_sell := in_session and not htf_veto_block and entry_is_fresh and barstate.isconfirmed and is_bear and
                    passes_quality_filter(final_score, minScoreSell) and
                    not s_fired
 
@@ -1904,15 +1832,6 @@ if showDash and barstate.islast
     string gate_label = gateOn ? "Gates" : "Risks"
     string count_display = active_gate_count > 0 ? str.tostring(active_gate_count) + " ACTIVE" : "NO ACTIVE"
     color gate_color = active_gate_count > 0 ? color.orange : color.new(color.gray, 40)
-
-    // V51D: Time-of-day filter currently suppressing NEW entries — always visible
-    // here (not gated behind extDash) since it directly explains "no signal fired"
-    string time_filter_display = in_open_block ? " ⏰ OPEN BLOCK" :
-                                 in_lunch_block ? " ⏰ LUNCH BLOCK" :
-                                 in_late_cutoff ? " ⏰ LATE CUTOFF" : ""
-    if time_filter_display != ""
-        count_display += time_filter_display
-        gate_color := color.orange
 
     table.cell(d, 0, row, gate_label, text_color = gate_color, text_halign = text.align_left, text_size = size.small)
     table.cell(d, 1, row, count_display, text_color = gate_color, text_size = size.small)
