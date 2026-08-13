@@ -1,7 +1,7 @@
 //@version=6
 
 // Version
-string VERSION = "V51H"
+string VERSION = "V51I"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey
@@ -10,12 +10,37 @@ indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 // These methodologies are educational references and do not guarantee any specific trading results.
 
 //======================================================================
+// V51I (2026-08-13): ATR-BASED EXITS REMOVED — FIXED % ONLY (from V51B)
+//======================================================================
+// REASON:
+//   - Fixed % is now the only P&L Exit Signal mode. ATR-Based Exits
+//     (the last remaining half of V51B, after Time Stop was removed
+//     in V51H) is removed as unused complexity.
+//
+// REMOVED:
+//   - Input `exitMode` and its "Fixed %"/"ATR-Based" selector.
+//   - Inputs `stopATRMult`/`targetATRMult`.
+//   - `pnl_stop_price`/`pnl_target_price` (var float) and their freeze
+//     assignment at all 8 P&L entry/re-arm branches.
+//   - ATR-Based branch of target/stop hit detection — `target_hit`/
+//     `stop_hit` now always compute from `current_pnl` vs `pnlTarget`
+//     (exact V50 behavior).
+//   - ATR-Based branch of PROFIT/LOSS label text (realized % display).
+//
+// RESULT:
+//   - P&L Exit Signals are Fixed %-only, identical to V50. Time Stop
+//     (removed in V51H) and ATR-Based Exits (removed here) together
+//     retire all of V51B; nothing from that phase remains.
+//======================================================================
+
+//======================================================================
 // V51H (2026-08-13): TIME STOP FEATURE REMOVED (from V51B)
 //======================================================================
 // REASON:
 //   - No observed value from forcing an exit after N bars regardless of
 //     P&L — removed rather than kept as unused complexity. ATR-Based
-//     Exits (the other half of V51B) are untouched and remain.
+//     Exits (the other half of V51B at the time) were untouched here
+//     and remained until they were also removed in V51I.
 //
 // REMOVED:
 //   - Inputs `useTimeStop`/`timeStopBars`.
@@ -26,8 +51,8 @@ indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 //   - TIME STOP exit label and its `alertcondition`.
 //
 // RESULT:
-//   - `signal_profit`/`signal_loss` and ATR-Based Exits behave exactly
-//     as before. Alerts reduced from 5 to 4 (BUY/SELL/PROFIT/LOSS).
+//   - `signal_profit`/`signal_loss` behave exactly as before. Alerts
+//     reduced from 5 to 4 (BUY/SELL/PROFIT/LOSS).
 //======================================================================
 
 //======================================================================
@@ -350,26 +375,7 @@ grp_pnl = "💰 P&L Exit Signals"
 enablePnL = input.bool(true, "Enable P&L Exit Signals", group = grp_pnl,
      tooltip = "Track and display PROFIT/LOSS exit signals when price moves ±target% from entry")
 pnlTarget = input.float(1.0, "P&L Target (%)", minval = 0.1, maxval = 10.0, step = 0.1, group = grp_pnl,
-     tooltip = "Exit signal fires at ±this percentage. Default: 1.0%\nOnly used when Exit Mode = Fixed %")
-
-// V51B: ATR-Based Exits
-exitMode = input.string("Fixed %", "Exit Mode", options = ["Fixed %", "ATR-Based"], group = grp_pnl,
-     tooltip = "FIXED % (V50 behavior, default):\n" +
-               "• PROFIT/LOSS fires at ±'P&L Target (%)' from entry\n" +
-               "• Same target for every instrument regardless of volatility\n\n" +
-               "ATR-BASED:\n" +
-               "• Stop/target are set in multiples of intraday ATR(14)\n" +
-               "• Stop = entry ∓ 'Stop ATR Multiplier' × ATR\n" +
-               "• Target = entry ± 'Target ATR Multiplier' × ATR\n" +
-               "• Levels are computed once at entry and FROZEN for the life\n" +
-               "  of the position — they do not drift with intrabar ATR\n" +
-               "• PROFIT/LOSS labels show the actual realized % (not the multiplier)")
-
-stopATRMult = input.float(1.2, "Stop ATR Multiplier", minval = 0.5, maxval = 3.0, step = 0.1, group = grp_pnl,
-     tooltip = "Stop distance = this × intraday ATR(14).\nOnly used when Exit Mode = ATR-Based")
-
-targetATRMult = input.float(2.0, "Target ATR Multiplier", minval = 1.0, maxval = 5.0, step = 0.1, group = grp_pnl,
-     tooltip = "Target distance = this × intraday ATR(14).\nOnly used when Exit Mode = ATR-Based")
+     tooltip = "Exit signal fires at ±this percentage. Default: 1.0%")
 
 pnlTrackingMode = input.string("Last Signal", "P&L Tracking Mode",
      options = ["Last Signal", "First Signal"], group = grp_pnl,
@@ -1122,16 +1128,12 @@ var string last_signal_type = "NONE"
 var bool has_previous_signal = false
 
 //======================================================================
-// P&L EXIT TRACKING WITH DUAL-MODE SUPPORT
+// P&L EXIT TRACKING
 //======================================================================
 // State tracking for PROFIT/LOSS exit signals
 var float pnl_entry_price = na          // Entry price for current position
 var string pnl_direction = "NONE"       // "BUY" or "SELL" or "NONE"
 var bool pnl_exit_fired = false         // Has PROFIT/LOSS fired for this entry?
-
-// V51B: ATR-Based exit state — frozen at entry, na in Fixed % mode
-var float pnl_stop_price = na           // Frozen stop price (ATR-Based mode only)
-var float pnl_target_price = na         // Frozen target price (ATR-Based mode only)
 
 // Additional state for "First Signal" mode
 var float first_signal_entry = na       // Entry price of first signal in directional run
@@ -1147,21 +1149,9 @@ if pnl_direction == "BUY" and not na(pnl_entry_price)
 else if pnl_direction == "SELL" and not na(pnl_entry_price)
     current_pnl := ((pnl_entry_price - close) / pnl_entry_price) * 100
 
-// V51B: Target/stop hit detection — Fixed % (V50 behavior, unchanged) or
-// ATR-Based (frozen price levels set at entry — see UPDATE P&L EXIT TRACKING below)
-bool target_hit = false
-bool stop_hit = false
-
-if exitMode == "ATR-Based"
-    if pnl_direction == "BUY" and not na(pnl_target_price) and not na(pnl_stop_price)
-        target_hit := close >= pnl_target_price
-        stop_hit := close <= pnl_stop_price
-    else if pnl_direction == "SELL" and not na(pnl_target_price) and not na(pnl_stop_price)
-        target_hit := close <= pnl_target_price
-        stop_hit := close >= pnl_stop_price
-else
-    target_hit := current_pnl >= pnlTarget
-    stop_hit := current_pnl <= -pnlTarget
+// Target/stop hit detection (V50 behavior)
+bool target_hit = current_pnl >= pnlTarget
+bool stop_hit = current_pnl <= -pnlTarget
 
 // Check if P&L target/stop reached (only fire if not already fired for this entry)
 bool hit_profit = enablePnL and not pnl_exit_fired and target_hit
@@ -1358,15 +1348,13 @@ if signal_sell
     has_previous_signal := true
 
 //======================================================================
-// UPDATE P&L EXIT TRACKING (DUAL-MODE LOGIC)
+// UPDATE P&L EXIT TRACKING
 //======================================================================
-// V51B NOTE: Pine functions cannot reassign a value-type (float/int/bool/
-// string) global variable, even one declared with `var` — only reference
-// types (array/matrix/map/UDT) can be mutated from inside a function via
-// a parameter. pnl_entry_price/pnl_direction/etc. are plain value types,
-// so the entry/re-arm logic (including the ATR-freeze) stays inlined
-// at each branch below, same as V50 did for
-// pnl_entry_price/pnl_direction/pnl_exit_fired.
+// Pine functions cannot reassign a value-type (float/int/bool/string)
+// global variable, even one declared with `var` — only reference types
+// (array/matrix/map/UDT) can be mutated from inside a function via a
+// parameter. pnl_entry_price/pnl_direction/etc. are plain value types,
+// so the entry/re-arm logic stays inlined at each branch below.
 
 // Detect direction change
 bool direction_changed = false
@@ -1381,23 +1369,11 @@ if not is_first_signal_mode
         pnl_entry_price := close
         pnl_direction := "BUY"
         pnl_exit_fired := false
-        if exitMode == "ATR-Based"
-            pnl_stop_price := close - stopATRMult * atr
-            pnl_target_price := close + targetATRMult * atr
-        else
-            pnl_stop_price := na
-            pnl_target_price := na
 
     if signal_sell
         pnl_entry_price := close
         pnl_direction := "SELL"
         pnl_exit_fired := false
-        if exitMode == "ATR-Based"
-            pnl_stop_price := close + stopATRMult * atr
-            pnl_target_price := close - targetATRMult * atr
-        else
-            pnl_stop_price := na
-            pnl_target_price := na
 
 // FIRST SIGNAL MODE: Reset only on direction change
 else if is_first_signal_mode
@@ -1407,12 +1383,6 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "BUY"
             pnl_exit_fired := false
-            if exitMode == "ATR-Based"
-                pnl_stop_price := close - stopATRMult * atr
-                pnl_target_price := close + targetATRMult * atr
-            else
-                pnl_stop_price := na
-                pnl_target_price := na
             first_signal_entry := close
             first_signal_direction := "BUY"
 
@@ -1420,21 +1390,14 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "SELL"
             pnl_exit_fired := false
-            if exitMode == "ATR-Based"
-                pnl_stop_price := close + stopATRMult * atr
-                pnl_target_price := close - targetATRMult * atr
-            else
-                pnl_stop_price := na
-                pnl_target_price := na
             first_signal_entry := close
             first_signal_direction := "SELL"
 
     // Same direction: Keep original entry
     else
         if signal_buy and pnl_direction == "BUY"
-            // Keep original entry price AND frozen stop/target for full-run
-            // tracking, but re-arm the exit watch so the continued position
-            // can generate new exit signals
+            // Keep original entry price, but re-arm the exit watch so the
+            // continued position can generate new exit signals
             pnl_exit_fired := false
 
         else if signal_sell and pnl_direction == "SELL"
@@ -1445,12 +1408,6 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "BUY"
             pnl_exit_fired := false
-            if exitMode == "ATR-Based"
-                pnl_stop_price := close - stopATRMult * atr
-                pnl_target_price := close + targetATRMult * atr
-            else
-                pnl_stop_price := na
-                pnl_target_price := na
             first_signal_entry := close
             first_signal_direction := "BUY"
 
@@ -1458,12 +1415,6 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "SELL"
             pnl_exit_fired := false
-            if exitMode == "ATR-Based"
-                pnl_stop_price := close + stopATRMult * atr
-                pnl_target_price := close - targetATRMult * atr
-            else
-                pnl_stop_price := na
-                pnl_target_price := na
             first_signal_entry := close
             first_signal_direction := "SELL"
 
@@ -1585,11 +1536,7 @@ if signal_sell and showLabels
 // V48H: PROFIT/LOSS EXIT LABELS WITH ANCHOR-AWARE POSITIONING
 //======================================================================
 if signal_profit and enablePnL
-    // V51B: ATR-Based mode shows the actual realized %, not the multiplier;
-    // Fixed % mode keeps the exact V50 label text.
-    string label_text = exitMode == "ATR-Based" ?
-         "PROFIT " + str.tostring(current_pnl, "+#.##;-#.##") + "%" :
-         "PROFIT +" + str.tostring(pnlTarget, "#.#") + "%"
+    string label_text = "PROFIT +" + str.tostring(pnlTarget, "#.#") + "%"
     // V48H: Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
     float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
     string label_style = label.style_label_up
@@ -1612,11 +1559,7 @@ if signal_profit and enablePnL
          size = size.normal)
 
 if signal_loss and enablePnL
-    // V51B: ATR-Based mode shows the actual realized %, not the multiplier;
-    // Fixed % mode keeps the exact V50 label text.
-    string label_text = exitMode == "ATR-Based" ?
-         "LOSS " + str.tostring(current_pnl, "+#.##;-#.##") + "%" :
-         "LOSS -" + str.tostring(pnlTarget, "#.#") + "%"
+    string label_text = "LOSS -" + str.tostring(pnlTarget, "#.#") + "%"
     // V48H: Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
     float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
     string label_style = label.style_label_down
