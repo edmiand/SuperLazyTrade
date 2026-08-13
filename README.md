@@ -1,4 +1,4 @@
-# SuperLazyTrade V51G
+# SuperLazyTrade V51H
 
 **Systematic Intraday Momentum Trading Indicator for TradingView**
 *Pine Script v6 | By @dmandrey*
@@ -10,7 +10,7 @@
 The V51 series was a design-review pass. Each phase defaults to the exact V50 behavior (opt-in via a new input) except where noted. Two phases were later reverted after live testing found no value: Phase 4 (Time-of-Day Filters) and Phase 5 (HTF Counter-Trend, which also removed the older V49B HTF Gate 5 it built on) — see Version History.
 
 - **V51A — Time-of-Day Relative Volume:** `rvolMode` (default `Time-of-Day`) compares each bar's volume to the same bar-slot's average across prior sessions, removing the open/lunch volume-shape bias a trailing SMA has. Falls back to the legacy Rolling 20-bar method automatically when session history is thin.
-- **V51B — ATR-Based Exits + Time Stop:** `exitMode` (default `Fixed %`, preserves V50) adds an `ATR-Based` alternative — stop/target frozen at entry as a multiple of intraday ATR. Independent `useTimeStop`/`timeStopBars` (default off) forces an exit after N bars with the real P&L sign recorded as win/loss.
+- **V51B — ATR-Based Exits:** `exitMode` (default `Fixed %`, preserves V50) adds an `ATR-Based` alternative — stop/target frozen at entry as a multiple of intraday ATR. (V51B also added an optional Time Stop; it was removed in V51H.)
 - **V51C — Split Exit vs Reversal Win-Rate:** Success tracking is split into `*_exit_results` (target/stop/time-stop) and `*_reversal_results` (closed by an opposite signal) so the win rate no longer mixes two incompatible outcome definitions.
 - **V51F — Entry Freshness Constraint:** `maxBarsFromFlip` (default 0 = disabled) constrains Score-mode entries to fire only within N bars of the most recent anchor flip. Trend mode is unaffected (it fires on the flip bar by construction).
 
@@ -117,10 +117,10 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 - **Last Signal (default):** Entry resets on every new BUY/SELL — tracks per-signal P&L
 - **First Signal:** Entry resets only on direction change — tracks full directional run
 - **Fixed % target:** ±1.0% default (adjustable); fires PROFIT/LOSS exit labels and alerts
-- **ATR-Based exits (V51B):** stop/target frozen at entry as a multiple of intraday ATR; optional Time Stop forces an exit after N bars
+- **ATR-Based exits (V51B):** stop/target frozen at entry as a multiple of intraday ATR
 
 ### Win-Rate Tracking (V51C)
-- **Exit results** (BUY/SELL Exits): outcome of PROFIT/LOSS/TIME STOP exits only
+- **Exit results** (BUY/SELL Exits): outcome of PROFIT/LOSS exits only
 - **Reversal results** (BUY/SELL Reversal, Extended Metrics only): outcome of positions closed by an opposite signal instead of a target/stop
 - Kept as separate rolling windows so the win rate can actually validate parameter changes
 
@@ -144,12 +144,13 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 
 ## Version History
 
+- **V51H** (2026-08): Time Stop removed (from V51B) — no observed value from forcing an exit after N bars regardless of P&L; ATR-Based Exits unaffected; alerts back to 4
 - **V51G** (2026-08): HTF Counter-Trend filter removed entirely (Gate 5, input group, dashboard row) — no observable difference in signal behavior found in testing; risk gates back to 4
 - **V51F** (2026-08): Entry Freshness Constraint — `maxBarsFromFlip` limits Score-mode entries to N bars after an anchor flip
 - **V51E** (2026-08): HTF Counter-Trend Penalty → optional Hard Veto (`htfMode`) — *removed in V51G*
 - **V51D** (2026-08): Time-of-Day Filters — added, then removed as low-value (no `⏰` block-open/lunch/cutoff inputs remain)
 - **V51C** (2026-08): Split Exit vs Reversal win-rate tracking
-- **V51B** (2026-08): ATR-Based Exits + Time Stop
+- **V51B** (2026-08): ATR-Based Exits + Time Stop — *Time Stop half removed in V51H*
 - **V51A** (2026-08): Time-of-Day Relative Volume
 - **V50**: Hard-coded RTH session filter (9:30–4:00 PM ET); dashboard/gate bug fixes
 - **V49B**: Fixed stretch_factor ATR scale mismatch; added HTF Trend Filter (Gate 5) — *removed in V51G*

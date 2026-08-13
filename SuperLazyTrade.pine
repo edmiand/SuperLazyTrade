@@ -1,13 +1,34 @@
 //@version=6
 
 // Version
-string VERSION = "V51G"
+string VERSION = "V51H"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey
 // January 2026
 //
 // These methodologies are educational references and do not guarantee any specific trading results.
+
+//======================================================================
+// V51H (2026-08-13): TIME STOP FEATURE REMOVED (from V51B)
+//======================================================================
+// REASON:
+//   - No observed value from forcing an exit after N bars regardless of
+//     P&L — removed rather than kept as unused complexity. ATR-Based
+//     Exits (the other half of V51B) are untouched and remain.
+//
+// REMOVED:
+//   - Inputs `useTimeStop`/`timeStopBars`.
+//   - `pnl_entry_bar` (var int) and its assignment at all 8 P&L entry/
+//     re-arm branches — it existed solely to drive the time-stop clock.
+//   - `time_stop_due`/`signal_time_stop` computation.
+//   - TIME STOP capture in the exit-results success-rate arrays.
+//   - TIME STOP exit label and its `alertcondition`.
+//
+// RESULT:
+//   - `signal_profit`/`signal_loss` and ATR-Based Exits behave exactly
+//     as before. Alerts reduced from 5 to 4 (BUY/SELL/PROFIT/LOSS).
+//======================================================================
 
 //======================================================================
 // V51G (2026-08-13): HTF COUNTER-TREND FILTER REMOVED (Gate 5, V49B/V51E)
@@ -349,15 +370,6 @@ stopATRMult = input.float(1.2, "Stop ATR Multiplier", minval = 0.5, maxval = 3.0
 
 targetATRMult = input.float(2.0, "Target ATR Multiplier", minval = 1.0, maxval = 5.0, step = 0.1, group = grp_pnl,
      tooltip = "Target distance = this × intraday ATR(14).\nOnly used when Exit Mode = ATR-Based")
-
-useTimeStop = input.bool(false, "Enable Time Stop", group = grp_pnl,
-     tooltip = "If neither target nor stop is hit within 'Time Stop Bars' bars of\n" +
-               "entry, force an exit labeled TIME STOP. Applies in BOTH Exit Mode\n" +
-               "settings. The outcome is recorded as a win or loss based on the\n" +
-               "actual P&L sign at that bar (not automatically a loss).")
-
-timeStopBars = input.int(20, "Time Stop Bars", minval = 1, maxval = 200, group = grp_pnl,
-     tooltip = "Number of bars after entry before a Time Stop exit fires.\nOnly used when Enable Time Stop = true")
 
 pnlTrackingMode = input.string("Last Signal", "P&L Tracking Mode",
      options = ["Last Signal", "First Signal"], group = grp_pnl,
@@ -1120,7 +1132,6 @@ var bool pnl_exit_fired = false         // Has PROFIT/LOSS fired for this entry?
 // V51B: ATR-Based exit state — frozen at entry, na in Fixed % mode
 var float pnl_stop_price = na           // Frozen stop price (ATR-Based mode only)
 var float pnl_target_price = na         // Frozen target price (ATR-Based mode only)
-var int pnl_entry_bar = na              // bar_index when the current exit-watch cycle began (time stop clock)
 
 // Additional state for "First Signal" mode
 var float first_signal_entry = na       // Entry price of first signal in directional run
@@ -1160,19 +1171,12 @@ bool hit_loss = enablePnL and not pnl_exit_fired and stop_hit
 bool signal_profit = hit_profit and barstate.isconfirmed
 bool signal_loss = hit_loss and barstate.isconfirmed
 
-// V51B: Time stop — fires when neither target nor stop is hit within
-// timeStopBars of entry. Applies in both Exit Mode settings. Mutually
-// exclusive with signal_profit/signal_loss (checked via not hit_profit/loss).
-bool time_stop_due = useTimeStop and enablePnL and not pnl_exit_fired and not na(pnl_entry_bar) and
-                     pnl_direction != "NONE" and (bar_index - pnl_entry_bar) >= timeStopBars
-bool signal_time_stop = time_stop_due and not hit_profit and not hit_loss and barstate.isconfirmed
-
 // Track exit type for label placement
 var string pnl_exit_type = "NONE"
 
 // When exit signal fires, mark as fired but DON'T reset position
 // (continue tracking live P&L until entry resets per mode)
-if signal_profit or signal_loss or signal_time_stop
+if signal_profit or signal_loss
     pnl_exit_type := pnl_direction
     pnl_exit_fired := true
     // Note: pnl_direction and pnl_entry_price remain unchanged
@@ -1180,7 +1184,7 @@ if signal_profit or signal_loss or signal_time_stop
 
 //======================================================================
 // V44: HYBRID SUCCESS RATE TRACKING (ROLLING WINDOW)
-// V51C: Split into EXIT (target/stop/time-stop) vs REVERSAL (position
+// V51C: Split into EXIT (target/stop) vs REVERSAL (position
 // closed by an opposite signal before any exit fired) — these are two
 // incompatible outcome definitions and mixing them into one array made
 // the win rate unable to validate parameter changes (its stated purpose).
@@ -1190,13 +1194,13 @@ if signal_profit or signal_loss or signal_time_stop
 // Uses arrays to track last N signals (configurable via maxSignalsToTrack)
 
 // BUY Signal Tracking
-var array<bool> buy_exit_results = array.new<bool>()      // true=Win, false=Loss (PROFIT/LOSS/TIME STOP)
+var array<bool> buy_exit_results = array.new<bool>()      // true=Win, false=Loss (PROFIT/LOSS)
 var array<bool> buy_reversal_results = array.new<bool>()  // true=Win, false=Loss (closed by opposite signal)
 var bool resultCaptured_buy = false
 var float buy_entry_for_success = na
 
 // SELL Signal Tracking
-var array<bool> sell_exit_results = array.new<bool>()      // true=Win, false=Loss (PROFIT/LOSS/TIME STOP)
+var array<bool> sell_exit_results = array.new<bool>()      // true=Win, false=Loss (PROFIT/LOSS)
 var array<bool> sell_reversal_results = array.new<bool>()  // true=Win, false=Loss (closed by opposite signal)
 var bool resultCaptured_sell = false
 var float sell_entry_for_success = na
@@ -1318,17 +1322,8 @@ if enableSuccessRate
         sell_exit_results := add_result(sell_exit_results, false, maxSignalsToTrack)  // LOSS = Loss
         resultCaptured_sell := true
 
-    // V51B: Capture TIME STOP exits — outcome is the actual P&L sign, not automatically a loss
-    if signal_time_stop and pnl_direction == "BUY" and not resultCaptured_buy
-        buy_exit_results := add_result(buy_exit_results, current_pnl > 0, maxSignalsToTrack)
-        resultCaptured_buy := true
-
-    if signal_time_stop and pnl_direction == "SELL" and not resultCaptured_sell
-        sell_exit_results := add_result(sell_exit_results, current_pnl > 0, maxSignalsToTrack)
-        resultCaptured_sell := true
-
     // V51C: Process BUY reversal tracking — if no exit captured above, this entry
-    // was closed by an opposite (SELL) signal rather than hitting target/stop/time-stop
+    // was closed by an opposite (SELL) signal rather than hitting target/stop
     if signal_buy
         if not resultCaptured_buy and not na(buy_entry_for_success)
             float buy_pnl = ((close - buy_entry_for_success) / buy_entry_for_success) * 100
@@ -1339,7 +1334,7 @@ if enableSuccessRate
         resultCaptured_buy := false
 
     // V51C: Process SELL reversal tracking — if no exit captured above, this entry
-    // was closed by an opposite (BUY) signal rather than hitting target/stop/time-stop
+    // was closed by an opposite (BUY) signal rather than hitting target/stop
     if signal_sell
         if not resultCaptured_sell and not na(sell_entry_for_success)
             float sell_pnl = ((sell_entry_for_success - close) / sell_entry_for_success) * 100
@@ -1369,8 +1364,8 @@ if signal_sell
 // string) global variable, even one declared with `var` — only reference
 // types (array/matrix/map/UDT) can be mutated from inside a function via
 // a parameter. pnl_entry_price/pnl_direction/etc. are plain value types,
-// so the entry/re-arm logic (including the new ATR-freeze and time-stop-
-// clock reset) stays inlined at each branch below, same as V50 did for
+// so the entry/re-arm logic (including the ATR-freeze) stays inlined
+// at each branch below, same as V50 did for
 // pnl_entry_price/pnl_direction/pnl_exit_fired.
 
 // Detect direction change
@@ -1386,7 +1381,6 @@ if not is_first_signal_mode
         pnl_entry_price := close
         pnl_direction := "BUY"
         pnl_exit_fired := false
-        pnl_entry_bar := bar_index
         if exitMode == "ATR-Based"
             pnl_stop_price := close - stopATRMult * atr
             pnl_target_price := close + targetATRMult * atr
@@ -1398,7 +1392,6 @@ if not is_first_signal_mode
         pnl_entry_price := close
         pnl_direction := "SELL"
         pnl_exit_fired := false
-        pnl_entry_bar := bar_index
         if exitMode == "ATR-Based"
             pnl_stop_price := close + stopATRMult * atr
             pnl_target_price := close - targetATRMult * atr
@@ -1414,7 +1407,6 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "BUY"
             pnl_exit_fired := false
-            pnl_entry_bar := bar_index
             if exitMode == "ATR-Based"
                 pnl_stop_price := close - stopATRMult * atr
                 pnl_target_price := close + targetATRMult * atr
@@ -1428,7 +1420,6 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "SELL"
             pnl_exit_fired := false
-            pnl_entry_bar := bar_index
             if exitMode == "ATR-Based"
                 pnl_stop_price := close + stopATRMult * atr
                 pnl_target_price := close - targetATRMult * atr
@@ -1442,21 +1433,18 @@ else if is_first_signal_mode
     else
         if signal_buy and pnl_direction == "BUY"
             // Keep original entry price AND frozen stop/target for full-run
-            // tracking, but re-arm the exit watch (and its time-stop clock)
-            // so the continued position can generate new exit signals
+            // tracking, but re-arm the exit watch so the continued position
+            // can generate new exit signals
             pnl_exit_fired := false
-            pnl_entry_bar := bar_index
 
         else if signal_sell and pnl_direction == "SELL"
             pnl_exit_fired := false
-            pnl_entry_bar := bar_index
 
         // First signal in this direction
         else if signal_buy and pnl_direction != "BUY"
             pnl_entry_price := close
             pnl_direction := "BUY"
             pnl_exit_fired := false
-            pnl_entry_bar := bar_index
             if exitMode == "ATR-Based"
                 pnl_stop_price := close - stopATRMult * atr
                 pnl_target_price := close + targetATRMult * atr
@@ -1470,7 +1458,6 @@ else if is_first_signal_mode
             pnl_entry_price := close
             pnl_direction := "SELL"
             pnl_exit_fired := false
-            pnl_entry_bar := bar_index
             if exitMode == "ATR-Based"
                 pnl_stop_price := close + stopATRMult * atr
                 pnl_target_price := close - targetATRMult * atr
@@ -1651,31 +1638,6 @@ if signal_loss and enablePnL
          textcolor = color.white,
          size = size.normal)
 
-// V51B: TIME STOP exit label — fires when useTimeStop forces an exit before
-// target/stop is hit. Always shows the actual realized % (win or loss).
-if signal_time_stop and enablePnL
-    string label_text = "TIME STOP " + str.tostring(current_pnl, "+#.##;-#.##") + "%"
-    float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
-    string label_style = label.style_label_down
-
-    if signal_buy
-        label_style := label.style_label_down
-    else if signal_sell
-        label_style := label.style_label_up
-    else
-        if pnl_exit_type == "BUY"
-            label_style := label.style_label_down
-        else if pnl_exit_type == "SELL"
-            label_style := label.style_label_up
-
-    label.new(bar_index, label_price, label_text,
-         yloc = yloc.price,
-         style = label_style,
-         color = color.new(color.purple, 0),
-         textcolor = color.white,
-         size = size.normal)
-
-
 //======================================================================
 // DASHBOARD
 //======================================================================
@@ -1795,7 +1757,7 @@ if showDash and barstate.islast
     row += 1
     
     // V51C: SUCCESS RATE DISPLAY (BETWEEN GATES AND EXTENDED METRICS)
-    // Split EXIT (target/stop/time-stop) vs REVERSAL (closed by opposite
+    // Split EXIT (target/stop) vs REVERSAL (closed by opposite
     // signal) — one array mixing both couldn't validate parameter changes,
     // its whole purpose. Reversal rows gated behind extDash to protect the
     // row budget (see DASHBOARD_MAX_ROWS note at top of file).
@@ -1998,4 +1960,3 @@ alertcondition(signal_buy, title = "BUY", message = "BUY")
 alertcondition(signal_sell, title = "SELL", message = "SELL")
 alertcondition(signal_profit, title = "PROFIT", message = "PROFIT")
 alertcondition(signal_loss, title = "LOSS", message = "LOSS")
-alertcondition(signal_time_stop, title = "TIME STOP", message = "TIME STOP")
