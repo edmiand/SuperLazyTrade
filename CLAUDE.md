@@ -4,9 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a **Pine Script v6 TradingView indicator** — a single-file intraday momentum trading system. The sole source file is `SuperLazyTrade.pine`. There is no build system, package manager, or test runner; development means editing the `.pine` file and pasting it into TradingView's Pine Editor to compile and validate.
-
-Current version: **V50**
+This is a **Pine Script v6 TradingView indicator** — a single-file intraday momentum trading system. The sole source file is `SuperLazyTrade.pine`. There is no build system, package manager, or test runner; development means editing the `.pine` file and pasting it into TradingView's Pine Editor to compile and validate. See [Version Naming](#version-naming) for the current version.
 
 ## Development Workflow
 
@@ -36,12 +34,12 @@ The script is organized into sequential sections (read top-to-bottom, order matt
 7. **Dual-anchor trend classification** — SuperTrend vs EMA Cross mode; `is_bull`/`is_bear`/`trendUp`/`trendDown` unify both anchors behind a single interface. `trend_start_price` updated on every `trendUp`/`trendDown`.
 8. **Scoring engine** — 5 components summed to `raw_score` (capped at 100). Max theoretical total = 105 across all profiles. See [Scoring Components](#scoring-components).
 9. **Risk gates** — 5 gates calculate penalties; applied to `raw_score` → `final_score` only when `gateOn = true`; always shown as warnings regardless. See [Risk Gates](#risk-gates).
-10. **Signal generation** — Non-repainting; `barstate.isconfirmed` guards all flip conditions. Alternating BUY/SELL enforced via `b_fired`/`s_fired` flags. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. RTH filter via `time(timeframe.period, "0930-1600:23456")`.
+10. **Signal generation** — Signals are non-repainting; `barstate.isconfirmed` guards all flip conditions. HTF gate display and dashboard can flicker intrabar (live HTF bar values update continuously). Alternating BUY/SELL enforced via `b_fired`/`s_fired` flags. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. RTH filter via `time(timeframe.period, "0930-1600:23456")`.
 11. **P&L tracking** — Two independent systems: (a) live dashboard P&L using `pnl_entry_price`/`pnl_direction` with Last Signal or First Signal reset logic; (b) signal-to-signal `signal_pnl` history shown on labels.
 12. **Success rate tracking** — Rolling arrays (`buy_results`, `sell_results`) capped at `maxSignalsToTrack`; updated on PROFIT/LOSS exits first (to prevent double-count), then on new signals.
 13. **Visuals** — Conditional plots: SuperTrend line (green/red) or EMA9 dynamic line (green/red) based on active anchor; flip circles at transition bars; BUY/SELL labels anchored to active line price.
-14. **Dashboard** — `table.new` at `position.bottom_right` with `DASHBOARD_MAX_ROWS = 25`; rendered only on `barstate.islast`. Row overflow protected by `if row >= DASHBOARD_MAX_ROWS: break` guard in gate detail loop.
-15. **Alerts** — Four `alertcondition` calls: BUY, SELL, PROFIT, LOSS.
+14. **Dashboard** — `table.new` at `position.bottom_right` with `DASHBOARD_MAX_ROWS = 25`; rendered only on `barstate.islast`. The gate detail loop is the last section written; it has an explicit `if row >= DASHBOARD_MAX_ROWS: break` guard because it is the only variable-length section. All preceding rows are bounded by design.
+15. **Alerts** — Four `alertcondition` calls with plaintext messages: `"BUY"`, `"SELL"`, `"PROFIT"`, `"LOSS"`.
 
 ---
 
@@ -88,6 +86,9 @@ All 5 components sum to `raw_score`, capped at 100. Component maxes vary by prof
 - 5C Squeeze Release (5pts): sqz_release + RVOL >1.5 → 5pts; release alone → 2pts
 
 **Setup quality rating** (applied to `final_score` after any gate enforcement):
+
+`threshold` = `minScoreBuy` (bull) or `minScoreSell` (bear) — both are user inputs defaulting to 50, range 0–70. Max 70 ensures ⭐⭐⭐ EXCELLENT (threshold+30) is always reachable.
+
 - ⭐⭐⭐ EXCELLENT: `final_score ≥ threshold + 30`
 - ⭐⭐ STRONG: `≥ threshold + 15`
 - ⭐ GOOD: `≥ threshold`
@@ -109,47 +110,42 @@ All 5 components sum to `raw_score`, capped at 100. Component maxes vary by prof
 
 **Stretch Factor detail:** `stretch_factor = max(ema_stretch, trend_stretch)` where `ema_stretch = |close - ema20| / ATR(14)` and `trend_stretch = |close - trend_start_price| / ATR(14)`. Moderate penalty when `> ext_scale`; extreme when `> ext_scale × 1.5`. Velocity override (`ADX > 35` rising 3 bars) bypasses Gate 3 only.
 
+> **Historical note:** An earlier "Gate 5 (Breakout Bonus +15)" existed before V48B and was retired — moved to Component 5C. The current Gate 5 (HTF Counter-Trend) was added in V49B and is a different feature entirely.
+
 ---
 
 ## Profile Parameters Table
 
-All threshold variables are assigned once per bar based on `syminfo.type`:
+All threshold variables are assigned once per bar based on `syminfo.type`. The `switch` expression maps every possible `syminfo.type` value: `"stock"` → STOCK, `"fund"` → FUND, `"futures"` → FUTURES, `"crypto"` → CRYPTO, and **everything else** (index, forex, unknown) → MARKET via the switch default. The MARKET profile is the true catch-all; there is no separate DEFAULT profile in the code.
 
 | Profile | `vwap_h_limit` | `vwap_e_limit` | `adx_min` | `rvol_gate` | `ext_scale` | `fuel_max` | `ema_max` | `vwap_max` |
 |---------|----------------|----------------|-----------|-------------|-------------|------------|-----------|------------|
-| MARKET INDEX 🏦 | 0.7% | 1.5% | 25 | 1.0× | 2.0 ATR | 80% | 22 | 23 |
+| MARKET INDEX 🏦 *(index, forex, unknown)* | 0.7% | 1.5% | 25 | 1.0× | 2.0 ATR | 80% | 22 | 23 |
 | ETF / FUND 📊 | 1.0% | 2.0% | 18 | 1.0× | 2.2 ATR | 75% | 20 | 25 |
 | STOCK 🚀 | 1.8% | 3.5% | 20 | 1.2× | 3.0 ATR | 85% | 20 | 25 |
 | FUTURES ⚡ | 1.5% | 3.0% | 15 | 0.6× | 2.5 ATR | 90% | 30 | 15 |
 | CRYPTO 🪙 | 3.0% | 6.0% | 28 | 0.6× | 4.0 ATR | 95% | 25 | 20 |
-| DEFAULT | 1.5% | 3.0% | 22 | 0.8× | 2.5 ATR | 85% | 20 | 25 |
-
-`syminfo.type == "fund"` maps to FUND; `"futures"` to FUTURES; `"crypto"` to CRYPTO; `"stock"` to STOCK; anything else (index, forex, unknown) to MARKET.
 
 ---
 
 ## Auto SuperTrend Config Table
 
-Selected when `atrMode = "AUTO"` (default):
+Selected when `atrMode = "AUTO"` (default). Futures matching uses the first 2 characters of `syminfo.ticker`. Rows with identical ATR/Factor values reflect `else` branches in the code — no extra tuning exists for those sub-groups.
 
 | Instrument | Ticker Match | ATR Length | Factor |
 |------------|-------------|------------|--------|
 | High-vol stocks | NVDA, TSLA | 8 | 2.2 |
-| Blue-chip stocks | AAPL, MSFT, AMZN, GOOGL | 10 | 2.5 |
-| Generic stock | (other stocks) | 10 | 2.5 |
+| All other stocks *(incl. AAPL, MSFT, AMZN, GOOGL)* | (any) | 10 | 2.5 |
 | Semiconductor ETFs | SOXX, SMH | 10 | 2.5 |
-| Broad ETFs | QQQ, SPY, IWM | 12 | 2.8 |
-| Generic ETF | (other funds) | 12 | 2.8 |
+| All other ETFs/funds *(incl. QQQ, SPY, IWM)* | (any) | 12 | 2.8 |
 | Natural Gas | NG* | 8 | 2.2 |
 | Silver | SI* | 12 | 2.8 |
 | Gold | GC* | 12 | 2.8 |
 | Crude Oil | CL* | 10 | 2.5 |
 | Index Futures | ES*, NQ* | 12 | 3.0 |
-| Generic futures | (other futures) | 10 | 2.5 |
+| All other futures | (any) | 10 | 2.5 |
 | Crypto | (all) | 12 | 3.5 |
-| Other / Index | (fallback) | 14 | 3.0 |
-
-Futures matching uses first 2 characters of `syminfo.ticker`.
+| Other / Index / fallback | (all) | 14 | 3.0 |
 
 ---
 
@@ -159,11 +155,13 @@ Futures matching uses first 2 characters of `syminfo.ticker`.
 
 **Dual-anchor unification:** After anchor selection, all downstream logic uses `is_bull`, `is_bear`, `trendUp`, `trendDown` — never `st_*` or `ema_*` directly. The EMA slow period (`emaSlowPeriod` = 20 or 30) affects cross detection but NOT Component 1 scoring, which always uses `ema20`. Score mode and Trend mode are both gated through the same `is_bull`/`is_bear` flags.
 
-**Non-repainting guarantee:** Signals only fire on `barstate.isconfirmed`. The daily ATR and HTF EMAs use `request.security(..., lookahead_off)` to prevent lookahead.
+**Non-repainting:** *Signals* are non-repainting — `barstate.isconfirmed` guards every flip condition and all signal assignments. However, `request.security(..., lookahead_off)` still reads the developing HTF bar's live values intrabar, so Gate 5 status and the HTF dashboard row can flicker mid-bar. This is display-only; no signal fires until bar close.
 
-**Gate vs advisory mode:** Setting `gateOn = false` (default/recommended) shows gate warnings in the dashboard but does NOT subtract from `final_score`. Component 5C (Squeeze Release) is always active regardless of gate mode — it was moved from a gate bonus in V48B precisely to ensure consistent scoring.
+**Gate vs advisory mode:** Setting `gateOn = false` (default/recommended) shows gate warnings in the dashboard but does NOT subtract from `final_score`. Component 5C (Squeeze Release) is always active regardless of gate mode — it was moved from an old gate bonus in V48B precisely to ensure consistent scoring.
 
 **Signal blocking:** `b_fired` and `s_fired` prevent consecutive same-direction signals. Flags reset when the anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars — this was the V48H fix for EMA Cross mode. When `signal_buy` fires: `b_fired := true`, `s_fired := false` (and vice versa). RTH session open resets both flags so the first RTH bar is never blocked by overnight carryover.
+
+**RTH filter on 24h instruments:** `time(timeframe.period, "0930-1600:23456")` always evaluates against ET hours regardless of instrument type. The filter does NOT auto-disable for CRYPTO or 24h FUTURES. If `useSessionFilter = true` on those instruments, signals will be blocked outside 9:30–4:00 ET Mon–Fri with no warning. Recommended: disable `useSessionFilter` for crypto and around-the-clock futures contracts.
 
 **Two P&L tracking systems (independent):**
 - *Live dashboard P&L* — tracks position from `pnl_entry_price`. "Last Signal" mode resets entry on every new signal; "First Signal" mode resets only on direction change, so compounding same-direction signals track the full run.
@@ -171,22 +169,52 @@ Futures matching uses first 2 characters of `syminfo.ticker`.
 
 **Success rate tracking:** PROFIT/LOSS exits are captured *before* new-signal processing on the same bar to prevent double-counting. Results stored in rolling `array<bool>` capped at `maxSignalsToTrack` using FIFO (`array.shift` on overflow).
 
-**Dashboard row budget:** `DASHBOARD_MAX_ROWS = 25` (rows 0–24). With all options enabled + 5 active gates, the dashboard uses up to ~24 rows. The gate detail loop has an explicit `if row >= DASHBOARD_MAX_ROWS: break` guard to prevent runtime overflow.
+**Dashboard row budget:** `DASHBOARD_MAX_ROWS = 25` (rows 0–24). With all options enabled + 5 active gates, the dashboard uses up to ~24 rows. The gate detail loop is the last section; it has an explicit `if row >= DASHBOARD_MAX_ROWS: break` guard because it is the only variable-length section (all other rows are fixed-count by design).
 
 **VWAP grace zone asymmetry:** Bull grace zone tolerance = `vwap_h_limit × 0.2`; bear grace zone = `vwap_h_limit × 0.1`. Bears are held to half the tolerance — intentional, reflecting that short-side entries near VWAP carry more reversion risk.
 
 ---
 
+## Pine Script v6 Gotchas
+
+Common failure modes when editing this script:
+
+- **`var` variables** persist across bars and only initialize on bar 0. Do not use `var` for values that must recompute each bar (e.g., profile thresholds). The profile threshold variables (`vwap_h_limit`, `ema_max`, etc.) deliberately omit `var` so they reassign every bar.
+- **`request.security` series vs simple:** The HTF EMAs (`htf_ema9`, `htf_ema20`) and daily ATR (`atr_14`) use `lookahead = barmerge.lookahead_off`. Omitting this causes future-bar lookahead (repainting). Always pass the expression directly — do not pre-compute into a `var` before passing to `request.security`.
+- **`na` propagates through arithmetic:** `math.max(na, 0)` returns `na`, not 0. Always guard with `not na(x)` or `nz(x, 0)` before arithmetic involving potentially uninitialized series. This script uses explicit `not na(...)` checks before VWAP and session range calculations.
+- **`barstate.isconfirmed` on historical bars:** All historical bars are "confirmed" during replay. `barstate.islast` is true only on the most recent bar. The dashboard uses `barstate.islast`; signals use `barstate.isconfirmed`.
+- **`ta.crossover`/`ta.crossunder` are single-bar events:** They return `true` for exactly one bar. No multi-bar guard is needed; however, both require at least 2 bars of history.
+- **`array.get` throws on out-of-bounds:** Always check `array.size(arr) > 0` before accessing index 0. The success rate arrays are guarded by `totalTrades_buy > 0` before the win-count loop.
+- **`time()` session strings use ET for US equities** but the exchange timezone for other instruments. `"0930-1600:23456"` is hardcoded against ET — this is correct for US stocks but not appropriate for crypto or 24h futures without user awareness (see RTH filter note above).
+- **`str.split` includes empty strings** if the delimiter appears at the start/end of the string. The gate message word-wrap loop assumes no leading/trailing spaces in `gate_message` — the build logic concatenates with a trailing space, so `gate_lines` may include an empty last element. This is harmless because `str.length("") == 0 <= 30` and the empty string is pushed then rendered as a blank row.
+
+---
+
+## Compile-Check Checklist
+
+No test runner exists. After any edit, verify manually in this order:
+
+1. **Paste into Pine Editor → zero compilation errors** before proceeding
+2. **Load NVDA 2-min chart** → confirm dashboard appears at bottom-right
+3. **Score ≤ 100** on dashboard at all times (raw_score is capped, but confirm no overflow)
+4. **Signal alternation:** let a BUY fire → confirm next BUY is blocked until a SELL fires
+5. **No double-count on same-bar PROFIT + new signal:** when a PROFIT fires on the same bar as a new signal, confirm success rate increments by 1, not 2
+6. **Gate enforcement:** toggle `Enable Risk Gates` ON → confirm score drops when gates are active; toggle OFF → score unchanged but warnings visible
+7. **EMA Cross mode:** switch anchor to EMA Cross → confirm EMA9 line appears (not SuperTrend line), flip circles appear at crossover bars
+8. **Dashboard row count:** with HTF enabled + all 5 gates active + Extended Metrics ON, confirm no runtime error (row overflow guard working)
+
+---
+
 ## Version Naming
 
-The script file is `SuperLazyTrade.pine` (version-agnostic name). The current version is V50. Version identifiers (e.g., V49A) follow major=significant feature additions, minor letter=incremental fixes. The full changelog is documented in the block comments at the top of the file.
+The script file is `SuperLazyTrade.pine` (version-agnostic name). The current version is **V50**. Version identifiers follow major=significant feature additions, minor letter=incremental fixes. The full changelog is documented in the block comments at the top of the file.
 
 Key version milestones:
-- **V48B** — Breakout bonus moved from Gate 5 to Component 5C (always active); gate count settled at 4
+- **V48B** — Breakout bonus moved from old Gate 5 (Breakout Bonus, now retired) to Component 5C (always active); gate count reduced to 4
 - **V48D** — Adaptive SuperTrend AUTO mode added
 - **V48F** — Dual-anchor system (SuperTrend + EMA Cross)
 - **V48H** — EMA Cross signal blocking fix (direction-change reset, not flip-bar reset)
 - **V48I** — Continuous EMA9 line (no gaps)
 - **V49A** — EMA slow period selector (20 or 30)
-- **V49B** — HTF counter-trend filter (Gate 5) added; `ema_stretch` and `trend_stretch` unified via intraday ATR
-- **V50** — Bug fixes: dashboard row overflow guard, gate floor protection, session init, redundant flag assignments
+- **V49B** — HTF counter-trend filter added as new Gate 5 (unrelated to retired V48B Gate 5); gate count back to 5; `ema_stretch` and `trend_stretch` unified via intraday ATR
+- **V50** — Bug fixes: dashboard row overflow guard, gate floor protection (Gates 1 & 4), session init for unknown instruments, redundant flag assignments removed
