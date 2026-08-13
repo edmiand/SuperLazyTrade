@@ -740,7 +740,7 @@ else if syminfo.type == "crypto"
                       
 else
     // OTHER INSTRUMENTS: Daily reset at midnight
-    is_new_session := ta.change(time("D")) != 0
+    is_new_session := ta.change(time("D")) != 0 or na(session_high[1])
 
 // Reset or update session range
 if is_new_session
@@ -872,6 +872,7 @@ if not na(vwap) and vwap > 0 and not na(close) and close > 0
         else if close > vwap
             v_pts := 0
             v_status := "🔴 REVERSION RISK (" + str.tostring(vwap_dist_pct, "#.##") + "%)"
+        // Grace zone: bull gets 20% of h_limit tolerance (tighter for short side below)
         else if close < vwap and vwap_dist_pct <= (vwap_h_limit * 0.2)
             v_pts := vwap_grace
             v_status := "⚠️ GRACE ZONE (" + str.tostring(vwap_dist_pct, "#.##") + "%)"
@@ -893,6 +894,7 @@ if not na(vwap) and vwap > 0 and not na(close) and close > 0
         else if close < vwap
             v_pts := 0
             v_status := "🔴 REVERSION RISK (" + str.tostring(vwap_dist_pct, "#.##") + "%)"
+        // Grace zone: bear gets 10% of h_limit tolerance (stricter than bull's 20%)
         else if close > vwap and vwap_dist_pct <= (vwap_h_limit * 0.1)
             v_pts := vwap_grace
             v_status := "⚠️ GRACE ZONE (" + str.tostring(vwap_dist_pct, "#.##") + "%)"
@@ -1145,7 +1147,7 @@ if gateOn
 
     // Gate 1: Squeeze (Low Volatility / Range Bound)
     if gate1_squeeze
-        final_score := final_score - gate1_penalty
+        final_score := math.max(final_score - gate1_penalty, 0)
 
     // Gate 2: Stretch Factor (Unified - Mean Reversion + Trend Exhaustion)
     if gate2_stretched
@@ -1157,7 +1159,7 @@ if gateOn
 
     // Gate 4: Liquidity & Strength Circuit Breaker
     if gate4_liquidity
-        final_score := final_score - gate4_penalty
+        final_score := math.max(final_score - gate4_penalty, 0)
 
     // Gate 5: HTF Counter-Trend
     if gate5_htf
@@ -1402,13 +1404,11 @@ if signal_buy
     last_signal_price := close
     last_signal_type := "BUY"
     has_previous_signal := true
-    b_fired := true
 
 if signal_sell
     last_signal_price := close
     last_signal_type := "SELL"
     has_previous_signal := true
-    s_fired := true
 
 //======================================================================
 // UPDATE P&L EXIT TRACKING (DUAL-MODE LOGIC)
@@ -1658,7 +1658,7 @@ if showDash and barstate.islast
     
     // Fixed row allocation to prevent overflow
     
-    // Count active gates (V48B: 4 gates total)
+    // Count active gates (Gates 1-4 from V48B + Gate 5 from V49B = 5 total)
     int active_gate_count = 0
     if gate1_squeeze
         active_gate_count += 1
@@ -1884,24 +1884,26 @@ if showDash and barstate.islast
                 array.push(gate_lines, current_line)
             
             for i = 0 to array.size(gate_lines) - 1
+                if row >= DASHBOARD_MAX_ROWS
+                    break
                 string line_text = array.get(gate_lines, i)
-                
+
                 if i == 0
-                    table.cell(d, 0, row, gate_detail_label, 
-                         text_color = color.orange, 
-                         text_halign = text.align_left, 
+                    table.cell(d, 0, row, gate_detail_label,
+                         text_color = color.orange,
+                         text_halign = text.align_left,
                          text_size = size.small)
-                    table.cell(d, 1, row, line_text, 
-                         text_color = color.orange, 
+                    table.cell(d, 1, row, line_text,
+                         text_color = color.orange,
                          text_size = size.small)
                 else
-                    table.cell(d, 0, row, "", 
-                         text_color = color.orange, 
+                    table.cell(d, 0, row, "",
+                         text_color = color.orange,
                          text_size = size.small)
-                    table.cell(d, 1, row, line_text, 
-                         text_color = color.orange, 
+                    table.cell(d, 1, row, line_text,
+                         text_color = color.orange,
                          text_size = size.small)
-                
+
                 row += 1
 
 //======================================================================
