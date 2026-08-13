@@ -463,11 +463,12 @@ gateOn = input.bool(false, "Enable Risk Gates", group = grp_sig,
                "RISK GATES ARE ALWAYS VISIBLE:\n" +
                "• ON → 'Gates: 🚧 SQUEEZE (-30)'\n" +
                "• OFF → 'Risks: 🚧 SQUEEZE (-30)'\n\n" +
-               "V48B GATES (4 total - pure risk filters):\n" +
+               "RISK GATES (5 total - pure risk filters):\n" +
                "1. Squeeze: -30 when BB inside KC (range-bound)\n" +
                "2. Stretch: -10/-20 when price extended from EMA20 or flip\n" +
                "3. ATR Fuel: -25 when daily range >85% of ATR(14)\n" +
-               "4. Liquidity: -25 when RVOL<0.8 AND ADX choppy\n\n" +
+               "4. Liquidity: -25 when RVOL<0.8 AND ADX choppy\n" +
+               "5. HTF Counter-Trend: -20 when signal opposes HTF EMA9/20 direction\n\n" +
                "NOTE: Breakout bonus moved to Component 5 (always active)")
 
 grp_htf = "📡 HTF Trend Filter"

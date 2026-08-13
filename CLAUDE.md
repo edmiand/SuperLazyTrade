@@ -28,13 +28,13 @@ The script is organized into sequential sections (read top-to-bottom, order matt
    - `grp_success`: Success rate tracking, rolling window size
    - `grp_vis`: Dashboard visibility, extended metrics, circles, background
 3. **Adaptive SuperTrend params** — AUTO mode selects ATR length and factor based on `syminfo.type` and ticker; MANUAL overrides. See [Auto SuperTrend Config Table](#auto-supertrend-config-table).
-4. **Asset profile assignment** — Detects `syminfo.type` via a `switch` expression → sets `profile_name` and all threshold variables used throughout scoring. See [Profile Parameters Table](#profile-parameters-table).
+4. **Asset profile assignment** — A `switch` on `syminfo.type` first computes `asset_category` (STOCK/FUND/FUTURES/CRYPTO/MARKET); a separate `if/else if` chain keyed on `asset_category` then sets `profile_name` and all threshold variables used throughout scoring. See [Profile Parameters Table](#profile-parameters-table).
 5. **Core indicator calculations** — EMAs (9, `emaSlow`=user-choice 20 or 30, 20 fixed for scoring, 50), VWAP, ATR(14), RSI(14), ADX(14,14), MACD(12,26,9), relative volume (vs SMA-20), HTF EMA9/20 via `request.security`
 6. **Market regime detection** — Squeeze state (BB(20,2) inside KC(20,1.5×ATR)), squeeze release + bias, stretch factor (EMA distance + trend move since flip), velocity override (ADX>35 rising 3 bars), ATR fuel gauge (session range vs daily ATR-14)
 7. **Dual-anchor trend classification** — SuperTrend vs EMA Cross mode; `is_bull`/`is_bear`/`trendUp`/`trendDown` unify both anchors behind a single interface. `trend_start_price` updated on every `trendUp`/`trendDown`.
 8. **Scoring engine** — 5 components summed to `raw_score` (capped at 100). Max theoretical total = 105 across all profiles. See [Scoring Components](#scoring-components).
 9. **Risk gates** — 5 gates calculate penalties; applied to `raw_score` → `final_score` only when `gateOn = true`; always shown as warnings regardless. See [Risk Gates](#risk-gates).
-10. **Signal generation** — Signals are non-repainting; `barstate.isconfirmed` guards all flip conditions. HTF gate display and dashboard can flicker intrabar (live HTF bar values update continuously). Alternating BUY/SELL enforced via `b_fired`/`s_fired` flags. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. RTH filter via `time(timeframe.period, "0930-1600:23456")`.
+10. **Signal generation** — Signals are non-repainting; `barstate.isconfirmed` guards all flip conditions. HTF gate display and dashboard can flicker intrabar (live HTF bar values update continuously). In "Score" signal-timing mode, alternating BUY/SELL is enforced via `b_fired`/`s_fired` flags; in "Trend" mode, signals fire directly off `trendUp`/`trendDown` and never check these flags — alternation there falls out of the flip-bar semantics instead. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. RTH filter via `time(timeframe.period, "0930-1600:23456")`.
 11. **P&L tracking** — Two independent systems: (a) live dashboard P&L using `pnl_entry_price`/`pnl_direction` with Last Signal or First Signal reset logic; (b) signal-to-signal `signal_pnl` history shown on labels.
 12. **Success rate tracking** — Rolling arrays (`buy_results`, `sell_results`) capped at `maxSignalsToTrack`; updated on PROFIT/LOSS exits first (to prevent double-count), then on new signals.
 13. **Visuals** — Conditional plots: SuperTrend line (green/red) or EMA9 dynamic line (green/red) based on active anchor; flip circles at transition bars; BUY/SELL labels anchored to active line price.
@@ -74,11 +74,11 @@ All 5 components sum to `raw_score`, capped at 100. Component maxes vary by prof
 - 25pts: RVOL ≥ 2.5× (EXPLOSIVE)
 - 20pts: ≥ 2.0× | 15pts: ≥ 1.5× | 10pts: ≥ 1.2× | 5pts: ≥ 1.0× | 0pts: below
 
-**Component 4 — ADX Strength (scales with profile `adx_min`):**
-- 15pts: ADX ≥ 1.6× `adx_min` AND rising (2-bar)
-- 12pts: ≥ 1.6× OR (≥ 1.3× AND rising)
-- 9pts: ≥ 1.3× OR ≥ `adx_min`
-- 6/3/0: moderate/weak/choppy
+**Component 4 — ADX Strength (scales with profile `adx_min`, nested if/elseif — rising (2-bar) qualifies each tier):**
+- 15pts: ADX ≥ 1.6× `adx_min` AND rising | 12pts: ADX ≥ 1.6× `adx_min` and NOT rising
+- 12pts: ADX in [1.3×, 1.6×) `adx_min` AND rising | 9pts: same range, NOT rising
+- 9pts: ADX in [1.0×, 1.3×) `adx_min` (no rising check)
+- 6/3/0: moderate (≥0.8×) / weak (≥0.6×) / choppy (below)
 
 **Component 5 — Momentum Confluence (3 sub-components, max 20):**
 - 5A MACD (8pts): MACD line same sign as trend direction
@@ -159,7 +159,7 @@ Selected when `atrMode = "AUTO"` (default). Futures matching uses the first 2 ch
 
 **Gate vs advisory mode:** Setting `gateOn = false` (default/recommended) shows gate warnings in the dashboard but does NOT subtract from `final_score`. Component 5C (Squeeze Release) is always active regardless of gate mode — it was moved from an old gate bonus in V48B precisely to ensure consistent scoring.
 
-**Signal blocking:** `b_fired` and `s_fired` prevent consecutive same-direction signals. Flags reset when the anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars — this was the V48H fix for EMA Cross mode. When `signal_buy` fires: `b_fired := true`, `s_fired := false` (and vice versa). RTH session open resets both flags so the first RTH bar is never blocked by overnight carryover.
+**Signal blocking:** `b_fired` and `s_fired` prevent consecutive same-direction signals, but only in "Score" signal-timing mode — that's the only branch that checks `not b_fired`/`not s_fired` before firing. "Trend" mode fires directly off `trendUp`/`trendDown` (single-bar flip events) without consulting these flags at all; the flags are still updated in Trend mode but never gate anything there. Flags reset when the anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars — this was the V48H fix for EMA Cross mode. When `signal_buy` fires: `b_fired := true`, `s_fired := false` (and vice versa). RTH session open resets both flags so the first RTH bar is never blocked by overnight carryover.
 
 **RTH filter on 24h instruments:** `time(timeframe.period, "0930-1600:23456")` always evaluates against ET hours regardless of instrument type. The filter does NOT auto-disable for CRYPTO or 24h FUTURES. If `useSessionFilter = true` on those instruments, signals will be blocked outside 9:30–4:00 ET Mon–Fri with no warning. Recommended: disable `useSessionFilter` for crypto and around-the-clock futures contracts.
 
@@ -186,7 +186,7 @@ Common failure modes when editing this script:
 - **`ta.crossover`/`ta.crossunder` are single-bar events:** They return `true` for exactly one bar. No multi-bar guard is needed; however, both require at least 2 bars of history.
 - **`array.get` throws on out-of-bounds:** Always check `array.size(arr) > 0` before accessing index 0. The success rate arrays are guarded by `totalTrades_buy > 0` before the win-count loop.
 - **`time()` session strings use ET for US equities** but the exchange timezone for other instruments. `"0930-1600:23456"` is hardcoded against ET — this is correct for US stocks but not appropriate for crypto or 24h futures without user awareness (see RTH filter note above).
-- **`str.split` includes empty strings** if the delimiter appears at the start/end of the string. The gate message word-wrap loop assumes no leading/trailing spaces in `gate_message` — the build logic concatenates with a trailing space, so `gate_lines` may include an empty last element. This is harmless because `str.length("") == 0 <= 30` and the empty string is pushed then rendered as a blank row.
+- **`str.split` includes empty strings** if the delimiter appears at the start/end of the string. `gate_message` is built with a trailing space, so `str.split(gate_message, " ")` always yields a trailing empty token. The word-wrap loop never turns this into a visible row, though: an empty word either merges into the current line as a harmless trailing space (line stays under the 30-char cap) or, if a line break is forced first, becomes `current_line := ""`, which the final `if current_line != "": array.push(...)` guard then excludes. No blank row is ever pushed to `gate_lines`.
 
 ---
 
