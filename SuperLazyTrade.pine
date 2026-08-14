@@ -1027,27 +1027,14 @@ if signal_profit or signal_loss
     // Live P&L continues until reset conditions below
 
 //======================================================================
-// HYBRID SUCCESS RATE TRACKING (ROLLING WINDOW)
-// Split into EXIT (target/stop) vs REVERSAL (position
-// closed by an opposite signal before any exit fired) — these are two
-// incompatible outcome definitions and mixing them into one array made
-// the win rate unable to validate parameter changes (its stated purpose).
+// SUCCESS RATE TRACKING (ROLLING WINDOW)
+// Win rate of PROFIT/LOSS target exits only.
 //======================================================================
-// Separate tracking for BUY and SELL signals, each split exit/reversal
-// Prevents double-counting via resultCaptured flag
+// Separate tracking for BUY and SELL signals
 // Uses arrays to track last N signals (configurable via maxSignalsToTrack)
 
-// BUY Signal Tracking
-var array<bool> buy_exit_results = array.new<bool>()      // true=Win, false=Loss (PROFIT/LOSS)
-var array<bool> buy_reversal_results = array.new<bool>()  // true=Win, false=Loss (closed by opposite signal)
-var bool resultCaptured_buy = false
-var float buy_entry_for_success = na
-
-// SELL Signal Tracking
-var array<bool> sell_exit_results = array.new<bool>()      // true=Win, false=Loss (PROFIT/LOSS)
-var array<bool> sell_reversal_results = array.new<bool>()  // true=Win, false=Loss (closed by opposite signal)
-var bool resultCaptured_sell = false
-var float sell_entry_for_success = na
+var array<bool> buy_results = array.new<bool>()   // true=Win, false=Loss (PROFIT/LOSS)
+var array<bool> sell_results = array.new<bool>()  // true=Win, false=Loss (PROFIT/LOSS)
 
 // Shared read-only helper — computes [wins, total, rate%] for one
 // results array. Purely reads the array parameter and local variables,
@@ -1062,10 +1049,8 @@ calc_win_rate(array<bool> arr, bool enabled) =>
     float rate = total > 0 ? (wins / total) * 100 : 0.0
     [wins, total, rate]
 
-[totalWins_buy_exit, totalTrades_buy_exit, success_rate_buy_exit] = calc_win_rate(buy_exit_results, enableSuccessRate)
-[totalWins_buy_reversal, totalTrades_buy_reversal, success_rate_buy_reversal] = calc_win_rate(buy_reversal_results, enableSuccessRate)
-[totalWins_sell_exit, totalTrades_sell_exit, success_rate_sell_exit] = calc_win_rate(sell_exit_results, enableSuccessRate)
-[totalWins_sell_reversal, totalTrades_sell_reversal, success_rate_sell_reversal] = calc_win_rate(sell_reversal_results, enableSuccessRate)
+[totalWins_buy, totalTrades_buy, success_rate_buy] = calc_win_rate(buy_results, enableSuccessRate)
+[totalWins_sell, totalTrades_sell, success_rate_sell] = calc_win_rate(sell_results, enableSuccessRate)
 
 //======================================================================
 // SIGNAL GENERATION (NON-REPAINTING)
@@ -1146,48 +1131,21 @@ add_result(array<bool> arr, bool is_win, int max_size) =>
         array.shift(arr)
     arr
 
-// Only track if enabled
+// Only track if enabled. hit_profit/hit_loss are already guarded by
+// pnl_exit_fired, so signal_profit/signal_loss each fire exactly once
+// per entry — no extra double-count guard needed here.
 if enableSuccessRate
-    // Capture PROFIT/LOSS exits FIRST so the guard stays set when a new signal
-    // fires on the same bar, preventing the new-signal (reversal) block from double-counting.
-    if signal_profit and pnl_direction == "BUY" and not resultCaptured_buy
-        buy_exit_results := add_result(buy_exit_results, true, maxSignalsToTrack)  // PROFIT = Win
-        resultCaptured_buy := true
+    if signal_profit and pnl_direction == "BUY"
+        buy_results := add_result(buy_results, true, maxSignalsToTrack)  // PROFIT = Win
 
-    if signal_loss and pnl_direction == "BUY" and not resultCaptured_buy
-        buy_exit_results := add_result(buy_exit_results, false, maxSignalsToTrack)  // LOSS = Loss
-        resultCaptured_buy := true
+    if signal_loss and pnl_direction == "BUY"
+        buy_results := add_result(buy_results, false, maxSignalsToTrack)  // LOSS = Loss
 
-    // Capture PROFIT/LOSS exits for SELL positions
-    if signal_profit and pnl_direction == "SELL" and not resultCaptured_sell
-        sell_exit_results := add_result(sell_exit_results, true, maxSignalsToTrack)  // PROFIT = Win
-        resultCaptured_sell := true
+    if signal_profit and pnl_direction == "SELL"
+        sell_results := add_result(sell_results, true, maxSignalsToTrack)  // PROFIT = Win
 
-    if signal_loss and pnl_direction == "SELL" and not resultCaptured_sell
-        sell_exit_results := add_result(sell_exit_results, false, maxSignalsToTrack)  // LOSS = Loss
-        resultCaptured_sell := true
-
-    // Process BUY reversal tracking — if no exit captured above, this entry
-    // was closed by an opposite (SELL) signal rather than hitting target/stop
-    if signal_buy
-        if not resultCaptured_buy and not na(buy_entry_for_success)
-            float buy_pnl = ((close - buy_entry_for_success) / buy_entry_for_success) * 100
-            buy_reversal_results := add_result(buy_reversal_results, buy_pnl > 0, maxSignalsToTrack)
-
-        // Reset for new BUY entry
-        buy_entry_for_success := close
-        resultCaptured_buy := false
-
-    // Process SELL reversal tracking — if no exit captured above, this entry
-    // was closed by an opposite (BUY) signal rather than hitting target/stop
-    if signal_sell
-        if not resultCaptured_sell and not na(sell_entry_for_success)
-            float sell_pnl = ((sell_entry_for_success - close) / sell_entry_for_success) * 100
-            sell_reversal_results := add_result(sell_reversal_results, sell_pnl > 0, maxSignalsToTrack)
-
-        // Reset for new SELL entry
-        sell_entry_for_success := close
-        resultCaptured_sell := false
+    if signal_loss and pnl_direction == "SELL"
+        sell_results := add_result(sell_results, false, maxSignalsToTrack)  // LOSS = Loss
 
 //======================================================================
 // UPDATE SIGNAL P&L TRACKING (INDEPENDENT SYSTEM)
@@ -1506,102 +1464,55 @@ if showDash and barstate.islast
     row += 1
     
     // SUCCESS RATE DISPLAY (BETWEEN GATES AND EXTENDED METRICS)
-    // Split EXIT (target/stop) vs REVERSAL (closed by opposite
-    // signal) — one array mixing both couldn't validate parameter changes,
-    // its whole purpose. Reversal rows gated behind extDash to protect the
-    // row budget (see DASHBOARD_MAX_ROWS note at top of file).
+    // Win rate of PROFIT/LOSS target exits, BUY and SELL tracked separately.
     if enableSuccessRate
         // Separator before success rates
         table.cell(d, 0, row, "─────────────────────", text_color = color.new(color.gray, 60), text_size = size.small)
         table.merge_cells(d, 0, row, 1, row)
         row += 1
 
-        // BUY Exits
-        string buy_exit_count_text = totalTrades_buy_exit >= maxSignalsToTrack ?
-                                 str.tostring(totalWins_buy_exit) + "/" + str.tostring(totalTrades_buy_exit) + " (max)" :
-                                 str.tostring(totalWins_buy_exit) + "/" + str.tostring(totalTrades_buy_exit)
+        // BUY Win Rate
+        string buy_count_text = totalTrades_buy >= maxSignalsToTrack ?
+                                 str.tostring(totalWins_buy) + "/" + str.tostring(totalTrades_buy) + " (max)" :
+                                 str.tostring(totalWins_buy) + "/" + str.tostring(totalTrades_buy)
 
-        string buy_exit_rate_display = totalTrades_buy_exit > 0 ?
-                                  str.tostring(success_rate_buy_exit, "#.#") + "% [" + buy_exit_count_text + "]" :
+        string buy_rate_display = totalTrades_buy > 0 ?
+                                  str.tostring(success_rate_buy, "#.#") + "% [" + buy_count_text + "]" :
                                   "— [0/0]"
 
-        color buy_exit_rate_color = success_rate_buy_exit >= 60 ? color.lime :
-                               success_rate_buy_exit >= 50 ? color.yellow : color.red
+        color buy_rate_color = success_rate_buy >= 60 ? color.lime :
+                               success_rate_buy >= 50 ? color.yellow : color.red
 
-        table.cell(d, 0, row, "BUY Exits",
+        table.cell(d, 0, row, "BUY Win Rate",
              text_color = color.white,
              text_halign = text.align_left,
              text_size = size.small)
-        table.cell(d, 1, row, buy_exit_rate_display,
-             text_color = buy_exit_rate_color,
+        table.cell(d, 1, row, buy_rate_display,
+             text_color = buy_rate_color,
              text_size = size.small)
         row += 1
 
-        // SELL Exits
-        string sell_exit_count_text = totalTrades_sell_exit >= maxSignalsToTrack ?
-                                 str.tostring(totalWins_sell_exit) + "/" + str.tostring(totalTrades_sell_exit) + " (max)" :
-                                 str.tostring(totalWins_sell_exit) + "/" + str.tostring(totalTrades_sell_exit)
+        // SELL Win Rate
+        string sell_count_text = totalTrades_sell >= maxSignalsToTrack ?
+                                 str.tostring(totalWins_sell) + "/" + str.tostring(totalTrades_sell) + " (max)" :
+                                 str.tostring(totalWins_sell) + "/" + str.tostring(totalTrades_sell)
 
-        string sell_exit_rate_display = totalTrades_sell_exit > 0 ?
-                                   str.tostring(success_rate_sell_exit, "#.#") + "% [" + sell_exit_count_text + "]" :
+        string sell_rate_display = totalTrades_sell > 0 ?
+                                   str.tostring(success_rate_sell, "#.#") + "% [" + sell_count_text + "]" :
                                    "— [0/0]"
 
-        color sell_exit_rate_color = success_rate_sell_exit >= 60 ? color.lime :
-                                 success_rate_sell_exit >= 50 ? color.yellow : color.red
+        color sell_rate_color = success_rate_sell >= 60 ? color.lime :
+                                 success_rate_sell >= 50 ? color.yellow : color.red
 
-        table.cell(d, 0, row, "SELL Exits",
+        table.cell(d, 0, row, "SELL Win Rate",
              text_color = color.white,
              text_halign = text.align_left,
              text_size = size.small)
-        table.cell(d, 1, row, sell_exit_rate_display,
-             text_color = sell_exit_rate_color,
+        table.cell(d, 1, row, sell_rate_display,
+             text_color = sell_rate_color,
              text_size = size.small)
         row += 1
 
-        // Reversal rows — Extended Metrics only (row budget)
-        if extDash
-            // BUY Reversal
-            string buy_rev_count_text = totalTrades_buy_reversal >= maxSignalsToTrack ?
-                                     str.tostring(totalWins_buy_reversal) + "/" + str.tostring(totalTrades_buy_reversal) + " (max)" :
-                                     str.tostring(totalWins_buy_reversal) + "/" + str.tostring(totalTrades_buy_reversal)
-
-            string buy_rev_rate_display = totalTrades_buy_reversal > 0 ?
-                                      str.tostring(success_rate_buy_reversal, "#.#") + "% [" + buy_rev_count_text + "]" :
-                                      "— [0/0]"
-
-            color buy_rev_rate_color = success_rate_buy_reversal >= 60 ? color.lime :
-                                   success_rate_buy_reversal >= 50 ? color.yellow : color.red
-
-            table.cell(d, 0, row, "BUY Reversal",
-                 text_color = color.gray,
-                 text_halign = text.align_left,
-                 text_size = size.small)
-            table.cell(d, 1, row, buy_rev_rate_display,
-                 text_color = buy_rev_rate_color,
-                 text_size = size.small)
-            row += 1
-
-            // SELL Reversal
-            string sell_rev_count_text = totalTrades_sell_reversal >= maxSignalsToTrack ?
-                                     str.tostring(totalWins_sell_reversal) + "/" + str.tostring(totalTrades_sell_reversal) + " (max)" :
-                                     str.tostring(totalWins_sell_reversal) + "/" + str.tostring(totalTrades_sell_reversal)
-
-            string sell_rev_rate_display = totalTrades_sell_reversal > 0 ?
-                                       str.tostring(success_rate_sell_reversal, "#.#") + "% [" + sell_rev_count_text + "]" :
-                                       "— [0/0]"
-
-            color sell_rev_rate_color = success_rate_sell_reversal >= 60 ? color.lime :
-                                     success_rate_sell_reversal >= 50 ? color.yellow : color.red
-
-            table.cell(d, 0, row, "SELL Reversal",
-                 text_color = color.gray,
-                 text_halign = text.align_left,
-                 text_size = size.small)
-            table.cell(d, 1, row, sell_rev_rate_display,
-                 text_color = sell_rev_rate_color,
-                 text_size = size.small)
-            row += 1
-    
     // Extended Metrics
     if extDash
         // Separator
