@@ -1,17 +1,7 @@
-# SuperLazyTrade V51I
+# SuperLazyTrade
 
 **Systematic Intraday Momentum Trading Indicator for TradingView**
 *Pine Script v6 | By @dmandrey*
-
----
-
-## What's New in V51
-
-The V51 series was a design-review pass. Each phase defaults to the exact V50 behavior (opt-in via a new input) except where noted. Several phases were later reverted after live testing found no value: Phase 2 (ATR-Based Exits + Time Stop, fully retired), Phase 4 (Time-of-Day Filters), and Phase 5 (HTF Counter-Trend, which also removed the older V49B HTF Gate 5 it built on) — see Version History.
-
-- **V51A — Time-of-Day Relative Volume:** `rvolMode` (default `Time-of-Day`) compares each bar's volume to the same bar-slot's average across prior sessions, removing the open/lunch volume-shape bias a trailing SMA has. Falls back to the legacy Rolling 20-bar method automatically when session history is thin.
-- **V51C — Split Exit vs Reversal Win-Rate:** Success tracking is split into `*_exit_results` (target/stop) and `*_reversal_results` (closed by an opposite signal) so the win rate no longer mixes two incompatible outcome definitions.
-- **V51F — Entry Freshness Constraint:** `maxBarsFromFlip` (default 0 = disabled) constrains Score-mode entries to fire only within N bars of the most recent anchor flip. Trend mode is unaffected (it fires on the flip bar by construction).
 
 ---
 
@@ -23,7 +13,7 @@ The V51 series was a design-review pass. Each phase defaults to the exact V50 be
 |---|-----------|--------|-------|
 | 1 | EMA Cascade | up to 20–30 pts | Profile-adaptive; always scores against EMA 9/20/50 |
 | 2 | VWAP Value | up to 15–25 pts | Profile-adaptive; distance from session VWAP |
-| 3 | Volume Intensity | 25 pts | RVOL vs Time-of-Day or Rolling 20-bar baseline (V51A) |
+| 3 | Volume Intensity | 25 pts | RVOL vs Time-of-Day or Rolling 20-bar baseline |
 | 4 | ADX Strength | 15 pts | Trend strength, profile-scaled thresholds, rising bonus |
 | 5 | Momentum Confluence | 20 pts | MACD (8) + RSI (7) + Squeeze Release (5) |
 
@@ -101,7 +91,7 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 ## Trading Rules
 
 ### Entry Discipline
-- Only trade signals within 1-2 bars of generation (or constrain this formally via `Max Bars From Flip` in Score mode, V51F)
+- Only trade signals within 1-2 bars of generation (or constrain this formally via `Max Bars From Flip` in Score mode)
 - Verify VWAP alignment matches direction
 - Confirm volume spike (>1.2x minimum for stocks)
 - Avoid signals during active squeeze (Gate 1 warning)
@@ -116,7 +106,7 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 - **First Signal:** Entry resets only on direction change — tracks full directional run
 - **Fixed % target:** ±1.0% default (adjustable); fires PROFIT/LOSS exit labels and alerts
 
-### Win-Rate Tracking (V51C)
+### Win-Rate Tracking
 - **Exit results** (BUY/SELL Exits): outcome of PROFIT/LOSS exits only
 - **Reversal results** (BUY/SELL Reversal, Extended Metrics only): outcome of positions closed by an opposite signal instead of a target/stop
 - Kept as separate rolling windows so the win rate can actually validate parameter changes
@@ -133,36 +123,9 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 
 **Gate vs advisory:** `gateOn = false` (default) shows gate warnings but does not subtract from score. Component 5C (Squeeze Release) is always active regardless of gate mode.
 
-**Time-of-Day RVOL (V51A):** Removes the U-shaped intraday volume bias of a trailing SMA by comparing each bar to the historical average for its own bar-slot.
+**Time-of-Day RVOL:** Removes the U-shaped intraday volume bias of a trailing SMA by comparing each bar to the historical average for its own bar-slot.
 
-**Entry freshness (V51F):** `maxBarsFromFlip` (Score mode only) prevents chasing a trend long after the flip that triggered it.
-
----
-
-## Version History
-
-- **V51I** (2026-08): ATR-Based Exits removed (from V51B) — P&L Exit Signals reduced to Fixed %-only; PROFIT/LOSS behave identically to V50; nothing from V51B remains
-- **V51H** (2026-08): Time Stop removed (from V51B) — no observed value from forcing an exit after N bars regardless of P&L; alerts back to 4
-- **V51G** (2026-08): HTF Counter-Trend filter removed entirely (Gate 5, input group, dashboard row) — no observable difference in signal behavior found in testing; risk gates back to 4
-- **V51F** (2026-08): Entry Freshness Constraint — `maxBarsFromFlip` limits Score-mode entries to N bars after an anchor flip
-- **V51E** (2026-08): HTF Counter-Trend Penalty → optional Hard Veto (`htfMode`) — *removed in V51G*
-- **V51D** (2026-08): Time-of-Day Filters — added, then removed as low-value (no `⏰` block-open/lunch/cutoff inputs remain)
-- **V51C** (2026-08): Split Exit vs Reversal win-rate tracking
-- **V51B** (2026-08): ATR-Based Exits + Time Stop — *fully retired: Time Stop removed in V51H, ATR-Based Exits removed in V51I*
-- **V51A** (2026-08): Time-of-Day Relative Volume
-- **V50**: Hard-coded RTH session filter (9:30–4:00 PM ET); dashboard/gate bug fixes
-- **V49B**: Fixed stretch_factor ATR scale mismatch; added HTF Trend Filter (Gate 5) — *removed in V51G*
-- **V49A**: User-selectable EMA slow period (20 or 30)
-- **V48I**: Continuous EMA9 line (no gaps between trend segments)
-- **V48H**: EMA Cross mode signal blocking fix; anchor-aware label positioning
-- **V48G**: Dynamic anchor visualization (hide inactive anchor)
-- **V48F**: Dual-anchor system — SuperTrend or EMA Cross user selection
-- **V48E**: Removed early-session detection logic
-- **V48D**: Adaptive SuperTrend parameters by asset type (AUTO/MANUAL)
-- **V48B**: Moved breakout bonus to Component 5C (always-active scoring)
-- **V48A**: Removed Component 6 (Candle Structure) and Gate 6 (Late Entry)
-- **V45** (Earlier): Unified Stretch Factor gate (mean reversion + trend exhaustion)
-- **V44** (Earlier): Hybrid success rate tracking with rolling window
+**Entry freshness:** `maxBarsFromFlip` (Score mode only) prevents chasing a trend long after the flip that triggered it.
 
 See `CLAUDE.md` for full architectural detail, gotchas, and the compile-check checklist.
 

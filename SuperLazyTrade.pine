@@ -1,133 +1,17 @@
 //@version=6
 
 // Version
-string VERSION = "V51I"
+string VERSION = "V1"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey
-// January 2026
 //
 // These methodologies are educational references and do not guarantee any specific trading results.
 
 //======================================================================
-// V51I (2026-08-13): ATR-BASED EXITS REMOVED — FIXED % ONLY (from V51B)
-//======================================================================
-// REASON:
-//   - Fixed % is now the only P&L Exit Signal mode. ATR-Based Exits
-//     (the last remaining half of V51B, after Time Stop was removed
-//     in V51H) is removed as unused complexity.
-//
-// REMOVED:
-//   - Input `exitMode` and its "Fixed %"/"ATR-Based" selector.
-//   - Inputs `stopATRMult`/`targetATRMult`.
-//   - `pnl_stop_price`/`pnl_target_price` (var float) and their freeze
-//     assignment at all 8 P&L entry/re-arm branches.
-//   - ATR-Based branch of target/stop hit detection — `target_hit`/
-//     `stop_hit` now always compute from `current_pnl` vs `pnlTarget`
-//     (exact V50 behavior).
-//   - ATR-Based branch of PROFIT/LOSS label text (realized % display).
-//
-// RESULT:
-//   - P&L Exit Signals are Fixed %-only, identical to V50. Time Stop
-//     (removed in V51H) and ATR-Based Exits (removed here) together
-//     retire all of V51B; nothing from that phase remains.
-//======================================================================
-
-//======================================================================
-// V51H (2026-08-13): TIME STOP FEATURE REMOVED (from V51B)
-//======================================================================
-// REASON:
-//   - No observed value from forcing an exit after N bars regardless of
-//     P&L — removed rather than kept as unused complexity. ATR-Based
-//     Exits (the other half of V51B at the time) were untouched here
-//     and remained until they were also removed in V51I.
-//
-// REMOVED:
-//   - Inputs `useTimeStop`/`timeStopBars`.
-//   - `pnl_entry_bar` (var int) and its assignment at all 8 P&L entry/
-//     re-arm branches — it existed solely to drive the time-stop clock.
-//   - `time_stop_due`/`signal_time_stop` computation.
-//   - TIME STOP capture in the exit-results success-rate arrays.
-//   - TIME STOP exit label and its `alertcondition`.
-//
-// RESULT:
-//   - `signal_profit`/`signal_loss` behave exactly as before. Alerts
-//     reduced from 5 to 4 (BUY/SELL/PROFIT/LOSS).
-//======================================================================
-
-//======================================================================
-// V51G (2026-08-13): HTF COUNTER-TREND FILTER REMOVED (Gate 5, V49B/V51E)
-//======================================================================
-// REASON:
-//   - User testing found no observable difference in signal behavior
-//     from the HTF Counter-Trend filter, so it was removed rather than
-//     kept as unused complexity.
-//
-// REMOVED:
-//   - Entire "📡 HTF Trend Filter" input group: htfEnabled, htfTimeframe,
-//     htfMode (Penalty/Hard Veto, V51E).
-//   - htf_ema9/htf_ema20 request.security calls and htf_is_bull/htf_is_bear.
-//   - Gate 5 (gate5_htf, gate5_penalty, HTF_PENALTY) — score penalty,
-//     gate_message entry, and enforcement-mode subtraction.
-//   - htf_veto_block and its AND-term in signal_buy/signal_sell (both
-//     Trend and Score mode).
-//   - Dashboard HTF row and its contribution to active_gate_count.
-//
-// RESULT:
-//   - Risk gates reduced from 5 to 4 (Squeeze, Stretch, ATR Fuel,
-//     Liquidity). All other V51 phases (RVOL, ATR exits, split
-//     win-rate, entry freshness) are unaffected.
-//======================================================================
-
-//======================================================================
-// V51F (2026-08-13): ENTRY FRESHNESS CONSTRAINT — SCORE MODE (Phase 6 of V51)
-//======================================================================
-// PROBLEM:
-//   - In Score mode, signal_buy/signal_sell fire on any confirmed bar
-//     where the score clears the threshold — potentially 30+ bars and
-//     2+ ATR past the anchor flip that started the move. The Stretch
-//     gate would catch some of this, but it's advisory-only unless
-//     'Enable Risk Gates' = true (default false).
-//
-// ADDED:
-//   - New input "Max Bars From Flip (Score mode)" (0-50, default 0 =
-//     disabled) in Signal & Risk Management. DEFAULT preserves exact
-//     V50/V51A-E behavior.
-//   - When > 0, Score-mode signals only fire within that many bars of
-//     the most recent trendUp/trendDown anchor flip.
-//   - Trend mode is completely unaffected — it already fires directly
-//     on the flip bar by construction, so freshness is automatic there.
-//   - New Extended Metrics row "Bars From Flip" (e.g. "7 / 10 max" or
-//     "7 (unlimited)") so the setting can be calibrated from observed
-//     chart behavior.
-//
-// TECHNICAL:
-//   - New `bars_since_flip` (var int): 0 on the flip bar itself,
-//     incrementing every subsequent bar; reset alongside the existing
-//     `trend_start_price` tracking so both stay in sync with the same
-//     flip event.
-//   - `entry_is_fresh = maxBarsFromFlip <= 0 or bars_since_flip <=
-//     maxBarsFromFlip`, AND'd into signal_buy/signal_sell in the Score-
-//     mode branch only (same pattern as V51E's independent AND'd
-//     conditions).
-//   - DASHBOARD_MAX_ROWS raised 27 -> 28 for the new Extended Metrics
-//     row — verified by hand-tracing every row increment in the worst
-//     case that the gate-details loop still gets its full 6-row budget
-//     (same margin as V50, preserved through V51C and V51F alike).
-//
-// RESULT:
-//   - Score-mode entries can now be constrained to the "fresh" part of
-//     a move, independent of the Stretch gate's advisory/enforcement
-//     setting.
-//   - Fully backward compatible: maxBarsFromFlip = 0 reproduces exact
-//     V50 Score-mode signal timing.
-//======================================================================
-
-
-//======================================================================
 // CONSTANTS
 //======================================================================
-// Consolidated Stretch Factor penalties (replaces OVEREXT + TREND_EXTENSION)
+// Stretch Factor penalties
 const int STRETCH_MODERATE_PENALTY = 10   // Stretched but not extreme
 const int STRETCH_EXTREME_PENALTY = 20    // High extension risk
 const int FUEL_PENALTY = 25
@@ -136,16 +20,12 @@ const int LIQUIDITY_PENALTY = 25
 
 // DASHBOARD
 const string DASH_WIDTH = "                                        "
-// V51C: Raised 25 -> 27 to fit the 2 new BUY/SELL Reversal rows (gated
-// behind extDash) added by the split Exit/Reversal win-rate tracking.
-// V51F: Raised 27 -> 28 to fit the new "Bars From Flip" Extended Metrics
-// row. Both changes preserve the same worst-case margin V50 had for the
-// variable-length gate-details loop (6 row slots before the break guard
-// below), verified by hand-tracing every row increment each time.
+// Sized to leave 6 row slots before the break guard for the
+// variable-length gate-details loop below.
 const int DASHBOARD_MAX_ROWS = 28
 
 //======================================================================
-// V51A: TYPES
+// TYPES
 //======================================================================
 // Pine arrays cannot directly hold other arrays (no array<array<float>>),
 // so a completed session's per-slot volume history is wrapped in a UDT.
@@ -158,7 +38,7 @@ type TodSession
 
 
 //======================================================================
-// V48F: SIGNAL ANCHOR SELECTION
+// SIGNAL ANCHOR SELECTION
 //======================================================================
 grp_anchor = "📍 Signal Anchor"
 anchorMode = input.string("EMA Cross", "Signal Anchor", 
@@ -176,7 +56,7 @@ anchorMode = input.string("EMA Cross", "Signal Anchor",
                "• Best for: NVDA, TSLA (fast movers), aggressive trading\n\n" +
                "NOTE: Both use same scoring/gates for quality filtering")
 
-// V49A: EMA Period Selection (only applies to EMA Cross mode)
+// EMA Period Selection (only applies to EMA Cross mode)
 emaSlowPeriod = input.int(20, "EMA Slow Period", 
      options = [20, 30],
      group = grp_anchor,
@@ -201,7 +81,7 @@ emaSlowPeriod = input.int(20, "EMA Slow Period",
 //======================================================================
 grp_st  = "SuperTrend Engine"
 
-// V48D: Adaptive ATR Mode
+// Adaptive ATR Mode
 atrMode = input.string("AUTO", "ATR Mode", 
      options = ["AUTO", "MANUAL"], 
      group = grp_st,
@@ -219,7 +99,7 @@ factor_manual = input.float(2.0, "Manual Factor", minval = 1.0, maxval = 5.0, st
      tooltip = "Only used when ATR Mode = MANUAL\nStandard range: 2.0-3.0")
 
 //======================================================================
-// V48D: ADAPTIVE SUPERTREND PARAMETER SELECTION
+// ADAPTIVE SUPERTREND PARAMETER SELECTION
 //======================================================================
 int atrLen = 7       // Default
 float factor = 2.0   // Default
@@ -320,7 +200,7 @@ minScoreBuy= input.int(50, "Min Score for BUY Signal", minval = 0, maxval = 70, 
 minScoreSell= input.int(50, "Min Score for SELL Signal", minval = 0, maxval = 70, group = grp_sig,
      tooltip = "Minimum score required for SELL label (Score mode only)\nMax 70 to allow ⭐⭐⭐ EXCELLENT rating (threshold + 30)")
 
-// V51F: Entry freshness constraint (Score mode only)
+// Entry freshness constraint (Score mode only)
 maxBarsFromFlip = input.int(0, "Max Bars From Flip (Score mode)", minval = 0, maxval = 50, group = grp_sig,
      tooltip = "SCORE MODE ONLY — Trend mode is unaffected (it already fires on the\n" +
                "flip bar by definition).\n\n" +
@@ -351,11 +231,10 @@ gateOn = input.bool(false, "Enable Risk Gates", group = grp_sig,
                "4. Liquidity: -25 when RVOL<0.8 AND ADX choppy\n\n" +
                "NOTE: Breakout bonus moved to Component 5 (always active)")
 
-// V51A: Time-of-Day Relative Volume
 rvolMode = input.string("Time-of-Day", "Relative Volume Mode",
      options = ["Rolling 20-bar", "Time-of-Day"],
      group = grp_sig,
-     tooltip = "ROLLING 20-BAR (V50 behavior):\n" +
+     tooltip = "ROLLING 20-BAR:\n" +
                "• Compares volume to the trailing 20-bar SMA\n" +
                "• On a 2-min chart this is a 40-minute trailing average\n" +
                "• Biased: overstates RVOL near the open, understates it at lunch\n\n" +
@@ -448,7 +327,7 @@ showBg   = input.bool(true, "Show Trend Background", group = grp_vis)
 
 
 //======================================================================
-// V33: ASSET DETECTION & PROFILE ASSIGNMENT
+// ASSET DETECTION & PROFILE ASSIGNMENT
 //======================================================================
 // 1. Core Detection using syminfo.type
 string asset_category = switch syminfo.type
@@ -534,7 +413,7 @@ else
 //======================================================================
 [supertrend, direction] = ta.supertrend(factor, atrLen)
 
-// V49A: Dynamic EMA calculation based on user selection
+// Dynamic EMA calculation based on user selection
 // EMAs (9 + user-selected slow period for EMA Cross, 50 for cascade scoring)
 ema9  = ta.ema(close, 9)
 emaSlow = ta.ema(close, emaSlowPeriod)  // User choice: 20 or 30
@@ -560,7 +439,7 @@ bool adx_rising_2 = ta.rising(adx, 2)  // 2-bar: Setup Score ADX component
 // MACD (12/26/9 standard - for Component 5 momentum alignment)
 [macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
 
-// Relative Volume: computed after session-tracking (V51A Time-of-Day RVOL
+// Relative Volume: computed after session-tracking (Time-of-Day RVOL
 // needs is_new_session, which is defined further below) — see rel_vol
 // assignment near the ATR Fuel Gauge section.
 
@@ -585,12 +464,12 @@ bool sqz_release  = not is_squeezing and is_squeezing[1]
 // Squeeze breakout bias (only valid on release bar)
 string sqz_bias = sqz_release ? (close > open ? "BULL 🟢" : "BEAR 🔴") : "—"
 
-// 2. STRETCH FACTOR (V45: Unified measurement replacing Gate 2 + Gate 7)
-// Captures both mean-reversion risk (EMA) and trend exhaustion (flip price)
+// 2. STRETCH FACTOR — unified measurement of mean-reversion risk (EMA)
+// and trend exhaustion (flip price)
 float ema_stretch = math.abs(close - ema20) / atr  // Distance from EMA20 in ATR units
 // Note: trend_stretch calculated after trend_start_price is tracked (see Gate section)
 
-// NEW: VELOCITY OVERRIDE
+// VELOCITY OVERRIDE
 // Detects high-conviction momentum that justifies exceeding standard ATR range
 bool is_high_velocity = adx > 35 and adx_rising_3
 
@@ -653,7 +532,7 @@ fuel_used := math.min(fuel_used, 200.0)
 bool fuel_exhausted = fuel_used > fuel_max
 
 //======================================================================
-// V51A: TIME-OF-DAY RELATIVE VOLUME
+// TIME-OF-DAY RELATIVE VOLUME
 //======================================================================
 // tod_vol_history: one TodSession per completed session, indexed by
 // bar-slot-since-session-open (slot 0 = first bar of the session).
@@ -702,7 +581,7 @@ string rvol_mode_label = tod_rvol_active ? "TOD" : (rvolMode == "Time-of-Day" ? 
 
 
 //======================================================================
-// V48F: DUAL-ANCHOR TREND CLASSIFICATION
+// DUAL-ANCHOR TREND CLASSIFICATION
 //======================================================================
 
 // ANCHOR 1: SuperTrend (existing)
@@ -711,7 +590,7 @@ bool st_is_bear = direction > 0
 bool st_flip_up = direction < 0 and direction[1] > 0 and barstate.isconfirmed
 bool st_flip_down = direction > 0 and direction[1] < 0 and barstate.isconfirmed
 
-// ANCHOR 2: EMA Cross (V49A: uses user-selected slow period)
+// ANCHOR 2: EMA Cross (uses user-selected slow period)
 bool ema_is_bull = ema9 > emaSlow
 bool ema_is_bear = ema9 < emaSlow
 bool ema_flip_up = ta.crossover(ema9, emaSlow) and barstate.isconfirmed
@@ -727,7 +606,7 @@ bool trendDown = anchorMode == "SuperTrend" ? st_flip_down : ema_flip_down
 if (trendUp or trendDown)
     trend_start_price := close
 
-// V51F: Bars since the most recent anchor flip — 0 on the flip bar itself,
+// Bars since the most recent anchor flip — 0 on the flip bar itself,
 // incrementing every bar after. Drives the Score-mode entry freshness gate
 // (maxBarsFromFlip) and the "Bars From Flip" Extended Metrics display.
 var int bars_since_flip = 0
@@ -944,7 +823,7 @@ else if is_bear
         rsi_pts := 0
 
 // COMPONENT 5C: SQUEEZE RELEASE MOMENTUM (5 points)
-// V48B: Moved from Gate 5 to always-active scoring
+// Moved from Gate 5 to always-active scoring
 // Rewards expansion opportunities regardless of Gate ON/OFF setting
 int sqz_pts = 0
 string sqz_status = ""
@@ -977,20 +856,19 @@ else
 r_status += " (MACD: " + (macd_aligned ? "✓" : "✗") + " | RSI: " + str.tostring(rsiVal, "#.#") + " | SQZ: " + sqz_status + ")"
 
 
-// CALCULATE RAW SCORE (V48B: 5 components, max 105 points → capped at 100)
+// CALCULATE RAW SCORE (5 components, max 105 points → capped at 100)
 // Component maxes: EMA(20) + VWAP(25) + Volume(25) + ADX(15) + Momentum(20) = 105
 int raw_score = t_pts + v_pts + vol_pts + a_pts + r_pts
 raw_score := math.min(raw_score, 100)
 
 
 //======================================================================
-// RISK GATES - CALCULATE ALL 4 GATES (V48B: Breakout moved to Component 5)
+// RISK GATES - CALCULATE ALL 4 GATES
 //======================================================================
 // Gates 1-4: Applied to final_score (affects signal generation)
 // In ADVISORY MODE: All gates shown but not applied
 // In ENFORCEMENT MODE: All gates applied to final_score
-// NOTE: Gate 5 (Breakout Bonus) moved to Component 5C in V48B
-//======================================================================
+// NOTE: The old Gate 5 (Breakout Bonus) lives in Component 5C instead
 //======================================================================
 
 //----------------------------------------------------------------------
@@ -999,13 +877,13 @@ raw_score := math.min(raw_score, 100)
 bool gate1_squeeze = is_squeezing
 
 //----------------------------------------------------------------------
-// Gate 2: STRETCH FACTOR (V45 UNIFIED - replaces old Gate 2 + Gate 7)
+// Gate 2: STRETCH FACTOR
 // Combines EMA mean-reversion risk + trend exhaustion into single metric
 //----------------------------------------------------------------------
 // Calculate trend stretch (move since flip)
 float trend_move = not na(trend_start_price) ? 
                    math.abs(close - trend_start_price) : 0.0
-// V49B: Use intraday ATR for both components so the scales are comparable
+// Use intraday ATR for both components so the scales are comparable
 float trend_stretch = atr > 0 ? trend_move / atr : 0.0
 
 // Unified Stretch Factor = MAX(EMA stretch, Trend stretch)
@@ -1066,7 +944,7 @@ if gate4_liquidity
 //======================================================================
 // RISK GATES - APPLY GATES 1-4 TO FINAL SCORE (ENFORCEMENT MODE ONLY)
 //======================================================================
-// V48B: Gates 1-4 (pure risk filters)
+// Gates 1-4 (pure risk filters)
 //======================================================================
 int final_score = raw_score
 
@@ -1149,7 +1027,7 @@ if pnl_direction == "BUY" and not na(pnl_entry_price)
 else if pnl_direction == "SELL" and not na(pnl_entry_price)
     current_pnl := ((pnl_entry_price - close) / pnl_entry_price) * 100
 
-// Target/stop hit detection (V50 behavior)
+// Target/stop hit detection
 bool target_hit = current_pnl >= pnlTarget
 bool stop_hit = current_pnl <= -pnlTarget
 
@@ -1173,8 +1051,8 @@ if signal_profit or signal_loss
     // Live P&L continues until reset conditions below
 
 //======================================================================
-// V44: HYBRID SUCCESS RATE TRACKING (ROLLING WINDOW)
-// V51C: Split into EXIT (target/stop) vs REVERSAL (position
+// HYBRID SUCCESS RATE TRACKING (ROLLING WINDOW)
+// Split into EXIT (target/stop) vs REVERSAL (position
 // closed by an opposite signal before any exit fired) — these are two
 // incompatible outcome definitions and mixing them into one array made
 // the win rate unable to validate parameter changes (its stated purpose).
@@ -1195,7 +1073,7 @@ var array<bool> sell_reversal_results = array.new<bool>()  // true=Win, false=Lo
 var bool resultCaptured_sell = false
 var float sell_entry_for_success = na
 
-// V51C: Shared read-only helper — computes [wins, total, rate%] for one
+// Shared read-only helper — computes [wins, total, rate%] for one
 // results array. Purely reads the array parameter and local variables,
 // so it does not run into the "can't reassign a global" restriction.
 calc_win_rate(array<bool> arr, bool enabled) =>
@@ -1229,7 +1107,7 @@ if session_just_opened
     b_fired := false
     s_fired := false
 
-// V48H FIX: Reset flags when DIRECTION changes (not just on flip bar)
+// Reset flags when DIRECTION changes (not just on flip bar)
 // This ensures proper alternating signals in both Trend and Score modes
 if is_bull and not is_bull[1]
     s_fired := false  // Allow SELL after direction becomes bullish
@@ -1239,9 +1117,9 @@ if is_bear and not is_bear[1]
 bool signal_buy = false
 bool signal_sell = false
 
-// V51F: Entry freshness constraint — Score mode only (Trend mode fires directly
+// Entry freshness constraint — Score mode only (Trend mode fires directly
 // off the flip bar, so it's already as fresh as possible by construction and is
-// deliberately left unaffected). maxBarsFromFlip = 0 disables this (V50 behavior).
+// deliberately left unaffected). maxBarsFromFlip = 0 disables this.
 bool entry_is_fresh = maxBarsFromFlip <= 0 or bars_since_flip <= maxBarsFromFlip
 
 if sigTime == "Trend"
@@ -1281,7 +1159,7 @@ if showSignalPnL and has_previous_signal and not na(last_signal_price)
         signal_pnl := ((last_signal_price - close) / last_signal_price) * 100
 
 //======================================================================
-// V44: UPDATE SUCCESS RATE TRACKING (HYBRID LOGIC WITH ROLLING WINDOW)
+// UPDATE SUCCESS RATE TRACKING (HYBRID LOGIC WITH ROLLING WINDOW)
 //======================================================================
 // Helper function to add result to array with max limit
 add_result(array<bool> arr, bool is_win, int max_size) =>
@@ -1312,7 +1190,7 @@ if enableSuccessRate
         sell_exit_results := add_result(sell_exit_results, false, maxSignalsToTrack)  // LOSS = Loss
         resultCaptured_sell := true
 
-    // V51C: Process BUY reversal tracking — if no exit captured above, this entry
+    // Process BUY reversal tracking — if no exit captured above, this entry
     // was closed by an opposite (SELL) signal rather than hitting target/stop
     if signal_buy
         if not resultCaptured_buy and not na(buy_entry_for_success)
@@ -1323,7 +1201,7 @@ if enableSuccessRate
         buy_entry_for_success := close
         resultCaptured_buy := false
 
-    // V51C: Process SELL reversal tracking — if no exit captured above, this entry
+    // Process SELL reversal tracking — if no exit captured above, this entry
     // was closed by an opposite (BUY) signal rather than hitting target/stop
     if signal_sell
         if not resultCaptured_sell and not na(sell_entry_for_success)
@@ -1439,7 +1317,7 @@ string pnl_text = pnl_direction != "NONE" ?
                   "—"
 
 //======================================================================
-// V48G: DYNAMIC ANCHOR-AWARE VISUAL ELEMENTS
+// DYNAMIC ANCHOR-AWARE VISUAL ELEMENTS
 //======================================================================
 
 //----------------------------------------------------------------------
@@ -1475,7 +1353,7 @@ plotshape(anchorMode == "SuperTrend" and showCircles and trendDown ? supertrend 
      size = size.tiny,
      color = color.red)
 
-// V48I: EMA9 Continuous Line (only when EMA Cross mode active)
+// EMA9 Continuous Line (only when EMA Cross mode active)
 // Single line that changes color based on trend direction
 // No gaps - plots on every bar
 color ema9_color = is_bull ? color.green : color.red
@@ -1498,7 +1376,7 @@ plotshape(anchorMode == "EMA Cross" and showCircles and trendDown ? ema9 : na,
      color = color.red)
 
 //======================================================================
-// V48H: BUY/SELL LABELS WITH ANCHOR-AWARE POSITIONING
+// BUY/SELL LABELS WITH ANCHOR-AWARE POSITIONING
 //======================================================================
 if signal_buy and showLabels
     string label_text = "BUY " + stars
@@ -1506,7 +1384,7 @@ if signal_buy and showLabels
     if showSignalPnL and not na(signal_pnl)
         label_text += "\n" + str.tostring(signal_pnl, "+#.##;-#.##") + "%"
     
-    // V48H: Use ema9 price in EMA Cross mode, supertrend in SuperTrend mode
+    // Use ema9 price in EMA Cross mode, supertrend in SuperTrend mode
     float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
     
     label.new(bar_index, label_price, label_text,
@@ -1522,7 +1400,7 @@ if signal_sell and showLabels
     if showSignalPnL and not na(signal_pnl)
         label_text += "\n" + str.tostring(signal_pnl, "+#.##;-#.##") + "%"
     
-    // V48H: Use ema9 price in EMA Cross mode, supertrend in SuperTrend mode
+    // Use ema9 price in EMA Cross mode, supertrend in SuperTrend mode
     float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
     
     label.new(bar_index, label_price, label_text,
@@ -1533,11 +1411,11 @@ if signal_sell and showLabels
          size = size.normal)
 
 //======================================================================
-// V48H: PROFIT/LOSS EXIT LABELS WITH ANCHOR-AWARE POSITIONING
+// PROFIT/LOSS EXIT LABELS WITH ANCHOR-AWARE POSITIONING
 //======================================================================
 if signal_profit and enablePnL
     string label_text = "PROFIT +" + str.tostring(pnlTarget, "#.#") + "%"
-    // V48H: Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
+    // Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
     float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
     string label_style = label.style_label_up
 
@@ -1560,7 +1438,7 @@ if signal_profit and enablePnL
 
 if signal_loss and enablePnL
     string label_text = "LOSS -" + str.tostring(pnlTarget, "#.#") + "%"
-    // V48H: Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
+    // Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
     float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
     string label_style = label.style_label_down
 
@@ -1585,7 +1463,7 @@ if signal_loss and enablePnL
 // DASHBOARD
 //======================================================================
 if showDash and barstate.islast
-    // Dashboard score equals final score (V48: no separate dashboard penalties)
+    // Dashboard score equals final score (no separate dashboard penalties)
     int dashboard_score = final_score
 
     // Use trend-appropriate threshold for dashboard display
@@ -1597,7 +1475,7 @@ if showDash and barstate.islast
     
     // Fixed row allocation to prevent overflow
     
-    // Count active gates (Gates 1-4 from V48B)
+    // Count active gates
     int active_gate_count = 0
     if gate1_squeeze
         active_gate_count += 1
@@ -1636,7 +1514,7 @@ if showDash and barstate.islast
     table.cell(d, 1, row, profile_name, text_color = color.white, text_size = size.small)
     row += 1
     
-    // V49A: Signal Anchor Display with dynamic EMA period
+    // Signal Anchor Display with dynamic EMA period
     string anchor_display = ""
     if anchorMode == "SuperTrend"
         anchor_display := "ST (" + str.tostring(atrLen) + "," + str.tostring(factor, "#.#") + ")"
@@ -1661,7 +1539,7 @@ if showDash and barstate.islast
     // ATR Fuel
     string fuel_status = ""
     
-    // V48E: Simplified fuel status (removed early session detection)
+    // Simplified fuel status (removed early session detection)
     if fuel_used > fuel_max
         if is_high_velocity
             fuel_status := "🔥 VELOCITY OVERRIDE (" + str.tostring(fuel_used, "#") + "%)"
@@ -1699,7 +1577,7 @@ if showDash and barstate.islast
     table.cell(d, 1, row, count_display, text_color = gate_color, text_size = size.small)
     row += 1
     
-    // V51C: SUCCESS RATE DISPLAY (BETWEEN GATES AND EXTENDED METRICS)
+    // SUCCESS RATE DISPLAY (BETWEEN GATES AND EXTENDED METRICS)
     // Split EXIT (target/stop) vs REVERSAL (closed by opposite
     // signal) — one array mixing both couldn't validate parameter changes,
     // its whole purpose. Reversal rows gated behind extDash to protect the
@@ -1752,7 +1630,7 @@ if showDash and barstate.islast
              text_size = size.small)
         row += 1
 
-        // V51C: Reversal rows — Extended Metrics only (row budget)
+        // Reversal rows — Extended Metrics only (row budget)
         if extDash
             // BUY Reversal
             string buy_rev_count_text = totalTrades_buy_reversal >= maxSignalsToTrack ?
@@ -1837,7 +1715,7 @@ if showDash and barstate.islast
              text_size = size.small)
         row += 1
 
-        // V51F: Bars From Flip — lets the user calibrate maxBarsFromFlip from observation
+        // Bars From Flip — lets the user calibrate maxBarsFromFlip from observation
         string bars_flip_display = str.tostring(bars_since_flip) +
              (maxBarsFromFlip > 0 ? " / " + str.tostring(maxBarsFromFlip) + " max" : " (unlimited)")
         color bars_flip_color = maxBarsFromFlip > 0 and bars_since_flip > maxBarsFromFlip ? color.gray : color.white
