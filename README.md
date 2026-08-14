@@ -106,7 +106,7 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 - **Fixed % target:** ±1.0% default (adjustable); fires PROFIT/LOSS exit labels and alerts
 
 ### Win-Rate Tracking
-- **BUY Win Rate / SELL Win Rate:** outcome of PROFIT/LOSS target exits only, tracked as separate rolling windows
+- **BUY Win Rate / SELL Win Rate:** every signal is scored when the next opposite-direction signal closes it — win only if PROFIT fired during the entry, loss otherwise (explicit LOSS exit, or no target ever hit); tracked as separate rolling windows
 
 ---
 

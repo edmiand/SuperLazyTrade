@@ -1028,13 +1028,15 @@ if signal_profit or signal_loss
 
 //======================================================================
 // SUCCESS RATE TRACKING (ROLLING WINDOW)
-// Win rate of PROFIT/LOSS target exits only.
+// Every BUY/SELL signal is scored when the opposite signal closes it:
+// Win if PROFIT fired at any point during the entry, Loss otherwise
+// (an explicit LOSS exit, or no target hit before the reversal).
 //======================================================================
 // Separate tracking for BUY and SELL signals
 // Uses arrays to track last N signals (configurable via maxSignalsToTrack)
 
-var array<bool> buy_results = array.new<bool>()   // true=Win, false=Loss (PROFIT/LOSS)
-var array<bool> sell_results = array.new<bool>()  // true=Win, false=Loss (PROFIT/LOSS)
+var array<bool> buy_results = array.new<bool>()   // true=Win (hit PROFIT), false=Loss
+var array<bool> sell_results = array.new<bool>()  // true=Win (hit PROFIT), false=Loss
 
 // Shared read-only helper — computes [wins, total, rate%] for one
 // results array. Purely reads the array parameter and local variables,
@@ -1121,7 +1123,7 @@ if showSignalPnL and has_previous_signal and not na(last_signal_price)
         signal_pnl := ((last_signal_price - close) / last_signal_price) * 100
 
 //======================================================================
-// UPDATE SUCCESS RATE TRACKING (HYBRID LOGIC WITH ROLLING WINDOW)
+// UPDATE SUCCESS RATE TRACKING (ROLLING WINDOW)
 //======================================================================
 // Helper function to add result to array with max limit
 add_result(array<bool> arr, bool is_win, int max_size) =>
@@ -1131,21 +1133,33 @@ add_result(array<bool> arr, bool is_win, int max_size) =>
         array.shift(arr)
     arr
 
-// Only track if enabled. hit_profit/hit_loss are already guarded by
-// pnl_exit_fired, so signal_profit/signal_loss each fire exactly once
-// per entry — no extra double-count guard needed here.
+// Only track if enabled. A signal's outcome isn't known until it closes
+// (the next opposite-direction signal fires, per strict alternation), so
+// each entry's "won" flag accumulates PROFIT hits and is read/reset there.
+var bool buy_won_this_entry = false
+var bool sell_won_this_entry = false
+var bool buy_entry_open = false
+var bool sell_entry_open = false
+
 if enableSuccessRate
     if signal_profit and pnl_direction == "BUY"
-        buy_results := add_result(buy_results, true, maxSignalsToTrack)  // PROFIT = Win
-
-    if signal_loss and pnl_direction == "BUY"
-        buy_results := add_result(buy_results, false, maxSignalsToTrack)  // LOSS = Loss
-
+        buy_won_this_entry := true
     if signal_profit and pnl_direction == "SELL"
-        sell_results := add_result(sell_results, true, maxSignalsToTrack)  // PROFIT = Win
+        sell_won_this_entry := true
 
-    if signal_loss and pnl_direction == "SELL"
-        sell_results := add_result(sell_results, false, maxSignalsToTrack)  // LOSS = Loss
+    // The opposite signal closes the prior entry — score it now.
+    if signal_sell and buy_entry_open
+        buy_results := add_result(buy_results, buy_won_this_entry, maxSignalsToTrack)
+    if signal_buy and sell_entry_open
+        sell_results := add_result(sell_results, sell_won_this_entry, maxSignalsToTrack)
+
+    // Open the new entry
+    if signal_buy
+        buy_entry_open := true
+        buy_won_this_entry := false
+    if signal_sell
+        sell_entry_open := true
+        sell_won_this_entry := false
 
 //======================================================================
 // UPDATE SIGNAL P&L TRACKING (INDEPENDENT SYSTEM)
