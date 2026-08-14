@@ -1094,6 +1094,12 @@ calc_win_rate(array<bool> arr, bool enabled) =>
 //======================================================================
 // SIGNAL GENERATION (NON-REPAINTING)
 //======================================================================
+// b_fired/s_fired enforce strict alternation: once a BUY fires, no further
+// BUY can fire — no matter how many bull/bear flips occur — until a SELL
+// actually fires (and vice versa). They only clear on the opposite signal
+// firing or at RTH session open; they do NOT clear on a trend direction
+// change by itself. Live P&L tracking (pnl_entry_price etc.) is unaffected
+// and keeps accumulating across the held direction regardless of this gate.
 var bool b_fired = false
 var bool s_fired = false
 
@@ -1107,13 +1113,6 @@ if session_just_opened
     b_fired := false
     s_fired := false
 
-// Reset flags when DIRECTION changes (not just on flip bar)
-// This ensures proper alternating signals in both Trend and Score modes
-if is_bull and not is_bull[1]
-    s_fired := false  // Allow SELL after direction becomes bullish
-if is_bear and not is_bear[1]
-    b_fired := false  // Allow BUY after direction becomes bearish
-
 bool signal_buy = false
 bool signal_sell = false
 
@@ -1123,9 +1122,11 @@ bool signal_sell = false
 bool entry_is_fresh = maxBarsFromFlip <= 0 or bars_since_flip <= maxBarsFromFlip
 
 if sigTime == "Trend"
-    // Fire at anchor flip + quality check
-    signal_buy  := in_session and trendUp and passes_quality_filter(final_score, minScoreBuy)
-    signal_sell := in_session and trendDown and passes_quality_filter(final_score, minScoreSell)
+    // Fire at anchor flip + quality check. b_fired/s_fired block a same-
+    // direction signal even across multiple flips (e.g. BUY -> flip bear
+    // with no SELL -> flip bull again) until the opposite side actually fires.
+    signal_buy  := in_session and trendUp and passes_quality_filter(final_score, minScoreBuy) and not b_fired
+    signal_sell := in_session and trendDown and passes_quality_filter(final_score, minScoreSell) and not s_fired
 
 else  // "Score" mode
     // Fire when score crosses threshold

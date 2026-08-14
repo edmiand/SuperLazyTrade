@@ -156,7 +156,7 @@ Selected when `atrMode = "AUTO"` (default). Futures matching uses the first 2 ch
 
 **Gate vs advisory mode:** Setting `gateOn = false` (default/recommended) shows gate warnings in the dashboard but does NOT subtract from `final_score`. Component 5C (Squeeze Release) is always active regardless of gate mode, to keep scoring consistent.
 
-**Signal blocking:** `b_fired` and `s_fired` prevent consecutive same-direction signals, but only in "Score" signal-timing mode — that's the only branch that checks `not b_fired`/`not s_fired` before firing. "Trend" mode fires directly off `trendUp`/`trendDown` (single-bar flip events) without consulting these flags at all; the flags are still updated in Trend mode but never gate anything there. Flags reset when the anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars — needed for correct behavior in EMA Cross mode. When `signal_buy` fires: `b_fired := true`, `s_fired := false` (and vice versa). RTH session open resets both flags so the first RTH bar is never blocked by overnight carryover.
+**Signal blocking (strict alternation):** `b_fired`/`s_fired` block a same-direction signal from firing again — in both "Trend" and "Score" signal-timing modes — until the opposite signal actually fires, no matter how many trend flips happen in between. E.g. BUY fires, trend flips bear but SELL's score/quality filter never clears, trend flips bull again → BUY stays blocked. The flags do **not** reset on a trend direction change by itself (`is_bull` vs `is_bull[1]`); they only clear when `signal_buy`/`signal_sell` actually fires (`b_fired := true, s_fired := false` and vice versa) or at RTH session open (`useSessionFilter`-gated, so 24h instruments with the filter off never get a daily reset). Live P&L tracking (`pnl_entry_price`, dashboard P&L, signal-to-signal P&L history) does not consult these flags and keeps accumulating across the held direction regardless.
 
 **RTH filter on 24h instruments:** `time(timeframe.period, "0930-1600:23456")` always evaluates against ET hours regardless of instrument type. The filter does NOT auto-disable for CRYPTO or 24h FUTURES. If `useSessionFilter = true` on those instruments, signals will be blocked outside 9:30–4:00 ET Mon–Fri with no warning. Recommended: disable `useSessionFilter` for crypto and around-the-clock futures contracts.
 
@@ -202,7 +202,7 @@ No test runner exists. After any edit, verify manually in this order:
 1. **Paste into Pine Editor → zero compilation errors** before proceeding
 2. **Load NVDA 2-min chart** → confirm dashboard appears at bottom-right
 3. **Score ≤ 100** on dashboard at all times (raw_score is capped, but confirm no overflow)
-4. **Signal alternation:** let a BUY fire → confirm next BUY is blocked until a SELL fires
+4. **Signal alternation:** let a BUY fire → confirm next BUY is blocked until a SELL fires, including across multiple trend flips where SELL's quality filter never clears (BUY → flip bear, no SELL → flip bull again → still no second BUY)
 5. **No double-count on same-bar PROFIT + new signal:** when a PROFIT fires on the same bar as a new signal, confirm success rate increments by 1, not 2
 6. **Gate enforcement:** toggle `Enable Risk Gates` ON → confirm score drops when gates are active; toggle OFF → score unchanged but warnings visible
 7. **EMA Cross mode:** switch anchor to EMA Cross → confirm EMA9 line appears (not SuperTrend line), flip circles appear at crossover bars

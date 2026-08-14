@@ -119,7 +119,7 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 
 **Dual-anchor unification:** After anchor selection, all downstream logic uses `is_bull`/`is_bear`/`trendUp`/`trendDown`. The EMA slow period affects cross detection only — Component 1 always scores against EMA20.
 
-**Signal blocking:** `b_fired`/`s_fired` prevent consecutive same-direction signals in Score mode only. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. Trend mode fires directly off flip bars and never checks these flags.
+**Signal blocking (strict alternation):** Once a BUY fires, no further BUY can fire — in either Trend or Score mode — until a SELL actually fires, regardless of how many trend flips happen in between. Flags only clear on the opposite signal firing or at RTH session open (only when the session filter is on). P&L tracking keeps running the whole time, unaffected by this gate.
 
 **Gate vs advisory:** `gateOn = false` (default) shows gate warnings but does not subtract from score. Component 5C (Squeeze Release) is always active regardless of gate mode.
 
