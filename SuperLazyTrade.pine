@@ -791,7 +791,7 @@ if is_bull
         rsi_pts := 7
     else if rsiVal > 45 and rsiVal <= 60
         rsi_pts := 5
-    else if rsiVal > 70 and not rsi_rising // Stalling at highs
+    else if rsiVal > 60 and not rsi_rising // Stalling at highs (contiguous with the >60/<=60 tiers above)
         rsi_pts := 2
     else
         rsi_pts := 0
@@ -800,7 +800,7 @@ else if is_bear
         rsi_pts := 7
     else if rsiVal < 55 and rsiVal >= 40
         rsi_pts := 5
-    else if rsiVal < 30 and rsi_rising // Stalling at lows
+    else if rsiVal < 40 and rsi_rising // Stalling at lows (contiguous with the >=40/<40 tiers above)
         rsi_pts := 2
     else
         rsi_pts := 0
@@ -1038,6 +1038,22 @@ if signal_profit or signal_loss
 var array<bool> buy_results = array.new<bool>()   // true=Win (hit PROFIT), false=Loss
 var array<bool> sell_results = array.new<bool>()  // true=Win (hit PROFIT), false=Loss
 
+// An entry's outcome isn't known until it closes (the next opposite-direction
+// signal, or an RTH session-open carryover close below), so each entry's
+// "won" flag accumulates PROFIT hits and is read/reset when it closes.
+var bool buy_won_this_entry = false
+var bool sell_won_this_entry = false
+var bool buy_entry_open = false
+var bool sell_entry_open = false
+
+// Helper function to add result to array with max limit
+add_result(array<bool> arr, bool is_win, int max_size) =>
+    array.push(arr, is_win)
+    // Remove oldest if exceeds limit
+    if array.size(arr) > max_size
+        array.shift(arr)
+    arr
+
 // Shared read-only helper — computes [wins, total, rate%] for one
 // results array. Purely reads the array parameter and local variables,
 // so it does not run into the "can't reassign a global" restriction.
@@ -1070,11 +1086,24 @@ var bool s_fired = false
 bool in_session       = not useSessionFilter or not na(time(timeframe.period, "0930-1600:23456"))
 bool prev_in_session  = not na(time(timeframe.period, "0930-1600:23456")[1])
 
-// Reset fired flags at session open so first RTH bar fires without overnight carryover
+// Reset fired flags at session open so first RTH bar fires without overnight carryover.
+// An entry still open from the prior session (never closed by an opposite
+// signal) would otherwise be silently dropped from win-rate tracking once
+// b_fired/s_fired unblock a fresh same-direction signal — score and close
+// it here first, same as a normal opposite-signal close would.
 bool session_just_opened = useSessionFilter and in_session and not prev_in_session
 if session_just_opened
     b_fired := false
     s_fired := false
+    if enableSuccessRate
+        if buy_entry_open
+            buy_results := add_result(buy_results, buy_won_this_entry, maxSignalsToTrack)
+            buy_entry_open := false
+            buy_won_this_entry := false
+        if sell_entry_open
+            sell_results := add_result(sell_results, sell_won_this_entry, maxSignalsToTrack)
+            sell_entry_open := false
+            sell_won_this_entry := false
 
 bool signal_buy = false
 bool signal_sell = false
@@ -1125,21 +1154,9 @@ if showSignalPnL and has_previous_signal and not na(last_signal_price)
 //======================================================================
 // UPDATE SUCCESS RATE TRACKING (ROLLING WINDOW)
 //======================================================================
-// Helper function to add result to array with max limit
-add_result(array<bool> arr, bool is_win, int max_size) =>
-    array.push(arr, is_win)
-    // Remove oldest if exceeds limit
-    if array.size(arr) > max_size
-        array.shift(arr)
-    arr
-
-// Only track if enabled. A signal's outcome isn't known until it closes
-// (the next opposite-direction signal fires, per strict alternation), so
-// each entry's "won" flag accumulates PROFIT hits and is read/reset there.
-var bool buy_won_this_entry = false
-var bool sell_won_this_entry = false
-var bool buy_entry_open = false
-var bool sell_entry_open = false
+// add_result() and the buy/sell won/open state are declared earlier
+// (alongside buy_results/sell_results) so the RTH session-open reset can
+// also close out a carried-over entry before this section runs.
 
 if enableSuccessRate
     if signal_profit and pnl_direction == "BUY"
