@@ -256,23 +256,6 @@ enablePnL = input.bool(true, "Enable P&L Exit Signals", group = grp_pnl,
 pnlTarget = input.float(1.0, "P&L Target (%)", minval = 0.1, maxval = 10.0, step = 0.1, group = grp_pnl,
      tooltip = "Exit signal fires at ±this percentage. Default: 1.0%")
 
-pnlTrackingMode = input.string("Last Signal", "P&L Tracking Mode",
-     options = ["Last Signal", "First Signal"], group = grp_pnl,
-     tooltip = "ENTRY PRICE RESET BEHAVIOR:\n\n" +
-               "LAST SIGNAL MODE:\n" +
-               "• Entry resets on EVERY new BUY/SELL signal\n" +
-               "• BUY@100 → BUY@101 → (entry now 101)\n" +
-               "• PROFIT/LOSS fires once per signal\n" +
-               "• Best for: Active position management\n\n" +
-               "FIRST SIGNAL MODE:\n" +
-               "• Entry resets ONLY on direction change\n" +
-               "• BUY@100 → BUY@101 → BUY@102 → (entry still 100)\n" +
-               "• BUY@100 → SELL@102 → (entry now 102, changed direction)\n" +
-               "• Tracks full directional run P&L\n" +
-               "• Best for: Trend following, pyramiding\n\n" +
-               "DASHBOARD DISPLAY:\n" +
-               "• [L] = Last Signal mode\n" +
-               "• [F] = First Signal mode")
 showSignalPnL = input.bool(true, "📊 Show Signal P&L History", group = grp_pnl,
      tooltip = "Display actual % gain/loss between consecutive signals.\n\n" +
                "HOW IT WORKS:\n" +
@@ -1013,13 +996,6 @@ var float pnl_entry_price = na          // Entry price for current position
 var string pnl_direction = "NONE"       // "BUY" or "SELL" or "NONE"
 var bool pnl_exit_fired = false         // Has PROFIT/LOSS fired for this entry?
 
-// Additional state for "First Signal" mode
-var float first_signal_entry = na       // Entry price of first signal in directional run
-var string first_signal_direction = "NONE" // Direction of first signal
-
-// Determine if tracking mode requires direction change for reset
-bool is_first_signal_mode = pnlTrackingMode == "First Signal"
-
 // Calculate current P&L for exit tracking
 float current_pnl = 0.0
 if pnl_direction == "BUY" and not na(pnl_entry_price)
@@ -1043,7 +1019,7 @@ bool signal_loss = hit_loss and barstate.isconfirmed
 var string pnl_exit_type = "NONE"
 
 // When exit signal fires, mark as fired but DON'T reset position
-// (continue tracking live P&L until entry resets per mode)
+// (continue tracking live P&L until the next opposite signal resets entry)
 if signal_profit or signal_loss
     pnl_exit_type := pnl_direction
     pnl_exit_fired := true
@@ -1235,67 +1211,20 @@ if signal_sell
 // parameter. pnl_entry_price/pnl_direction/etc. are plain value types,
 // so the entry/re-arm logic stays inlined at each branch below.
 
-// Detect direction change
-bool direction_changed = false
-if signal_buy and pnl_direction == "SELL"
-    direction_changed := true
-else if signal_sell and pnl_direction == "BUY"
-    direction_changed := true
+// Reset entry on every new signal. b_fired/s_fired strict alternation
+// (see SIGNAL GENERATION above) means signal_buy can only fire while
+// pnl_direction is "SELL" or "NONE" — never while still "BUY" — except
+// for the rare case where pnl_direction survived an RTH session reset
+// from the prior session's still-open position.
+if signal_buy
+    pnl_entry_price := close
+    pnl_direction := "BUY"
+    pnl_exit_fired := false
 
-// LAST SIGNAL MODE: Reset on every new signal
-if not is_first_signal_mode
-    if signal_buy
-        pnl_entry_price := close
-        pnl_direction := "BUY"
-        pnl_exit_fired := false
-
-    if signal_sell
-        pnl_entry_price := close
-        pnl_direction := "SELL"
-        pnl_exit_fired := false
-
-// FIRST SIGNAL MODE: Reset only on direction change
-else if is_first_signal_mode
-    // Direction changed: Start fresh
-    if direction_changed
-        if signal_buy
-            pnl_entry_price := close
-            pnl_direction := "BUY"
-            pnl_exit_fired := false
-            first_signal_entry := close
-            first_signal_direction := "BUY"
-
-        else if signal_sell
-            pnl_entry_price := close
-            pnl_direction := "SELL"
-            pnl_exit_fired := false
-            first_signal_entry := close
-            first_signal_direction := "SELL"
-
-    // Same direction: Keep original entry
-    else
-        if signal_buy and pnl_direction == "BUY"
-            // Keep original entry price, but re-arm the exit watch so the
-            // continued position can generate new exit signals
-            pnl_exit_fired := false
-
-        else if signal_sell and pnl_direction == "SELL"
-            pnl_exit_fired := false
-
-        // First signal in this direction
-        else if signal_buy and pnl_direction != "BUY"
-            pnl_entry_price := close
-            pnl_direction := "BUY"
-            pnl_exit_fired := false
-            first_signal_entry := close
-            first_signal_direction := "BUY"
-
-        else if signal_sell and pnl_direction != "SELL"
-            pnl_entry_price := close
-            pnl_direction := "SELL"
-            pnl_exit_fired := false
-            first_signal_entry := close
-            first_signal_direction := "SELL"
+if signal_sell
+    pnl_entry_price := close
+    pnl_direction := "SELL"
+    pnl_exit_fired := false
 
 //======================================================================
 // LIVE P&L TRACKING (DASHBOARD DISPLAY)
@@ -1311,10 +1240,8 @@ else if pnl_direction == "SELL" and not na(pnl_entry_price)
 else
     live_pnl_pct := 0.0
 
-// Display tracking mode in P&L text
-string mode_indicator = is_first_signal_mode ? " [F]" : " [L]"
-string pnl_text = pnl_direction != "NONE" ? 
-                  str.format("{0,number,+#.##;-#.##}%", live_pnl_pct) + mode_indicator : 
+string pnl_text = pnl_direction != "NONE" ?
+                  str.format("{0,number,+#.##;-#.##}%", live_pnl_pct) :
                   "—"
 
 //======================================================================

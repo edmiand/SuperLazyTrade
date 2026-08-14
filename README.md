@@ -101,9 +101,8 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 - Close all positions by 15:45 EST (no overnight holds)
 - Rotate instruments if conditions deteriorate
 
-### P&L Tracking Modes
-- **Last Signal (default):** Entry resets on every new BUY/SELL — tracks per-signal P&L
-- **First Signal:** Entry resets only on direction change — tracks full directional run
+### P&L Tracking
+- Entry resets on every new BUY/SELL signal (there's only ever one signal per held direction, thanks to strict alternation — see Key Design Decisions)
 - **Fixed % target:** ±1.0% default (adjustable); fires PROFIT/LOSS exit labels and alerts
 
 ### Win-Rate Tracking

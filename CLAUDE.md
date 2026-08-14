@@ -23,7 +23,7 @@ The script is organized into sequential sections (read top-to-bottom, order matt
    - `grp_anchor`: Signal Anchor (SuperTrend / EMA Cross) + EMA slow period
    - `grp_st`: SuperTrend ATR mode (AUTO / MANUAL) + manual ATR/Factor overrides
    - `grp_sig`: Signal timing, quality filter, min scores, RTH session filter, gate enforcement
-   - `grp_pnl`: P&L exit signals, target %, tracking mode, signal P&L history
+   - `grp_pnl`: P&L exit signals, target %, signal P&L history
    - `grp_success`: Success rate tracking, rolling window size
    - `grp_vis`: Dashboard visibility, extended metrics, circles, background
 3. **Adaptive SuperTrend params** — AUTO mode selects ATR length and factor based on `syminfo.type` and ticker; MANUAL overrides. See [Auto SuperTrend Config Table](#auto-supertrend-config-table).
@@ -34,7 +34,7 @@ The script is organized into sequential sections (read top-to-bottom, order matt
 8. **Scoring engine** — 5 components summed to `raw_score` (capped at 100). Max theoretical total = 105 across all profiles. See [Scoring Components](#scoring-components).
 9. **Risk gates** — 4 gates calculate penalties; applied to `raw_score` → `final_score` only when `gateOn = true`; always shown as warnings regardless. See [Risk Gates](#risk-gates).
 10. **Signal generation** — Signals are non-repainting; `barstate.isconfirmed` guards all flip conditions. In "Score" signal-timing mode, alternating BUY/SELL is enforced via `b_fired`/`s_fired` flags; in "Trend" mode, signals fire directly off `trendUp`/`trendDown` and never check these flags — alternation there falls out of the flip-bar semantics instead. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. RTH filter via `time(timeframe.period, "0930-1600:23456")`. Score-mode signals can also be constrained to fire only within `maxBarsFromFlip` bars of the anchor flip (default 0 = disabled); Trend mode is unaffected.
-11. **P&L tracking** — Two independent systems: (a) live dashboard P&L using `pnl_entry_price`/`pnl_direction` with Last Signal or First Signal reset logic; (b) signal-to-signal `signal_pnl` history shown on labels. PROFIT/LOSS exit triggers are Fixed %-only: `current_pnl` vs `±pnlTarget`.
+11. **P&L tracking** — Two independent systems: (a) live dashboard P&L using `pnl_entry_price`/`pnl_direction`, reset on every new signal; (b) signal-to-signal `signal_pnl` history shown on labels. PROFIT/LOSS exit triggers are Fixed %-only: `current_pnl` vs `±pnlTarget`.
 12. **Success rate tracking** — Rolling arrays (`buy_exit_results`/`sell_exit_results` for PROFIT/LOSS outcomes, `buy_reversal_results`/`sell_reversal_results` for positions closed by an opposite signal) capped at `maxSignalsToTrack`; updated on exits first (to prevent double-count), then on new signals.
 13. **Visuals** — Conditional plots: SuperTrend line (green/red) or EMA9 dynamic line (green/red) based on active anchor; flip circles at transition bars; BUY/SELL labels anchored to active line price.
 14. **Dashboard** — `table.new` at `position.bottom_right` with `DASHBOARD_MAX_ROWS = 28`; rendered only on `barstate.islast`. The gate detail loop is the last section written; it has an explicit `if row >= DASHBOARD_MAX_ROWS: break` guard because it is the only variable-length section. All preceding rows are bounded by design.
@@ -163,7 +163,7 @@ Selected when `atrMode = "AUTO"` (default). Futures matching uses the first 2 ch
 **Entry freshness constraint:** `maxBarsFromFlip` (0-50, default 0 = disabled) constrains Score-mode entries to fire only within N bars of the most recent anchor flip, via `entry_is_fresh = maxBarsFromFlip <= 0 or bars_since_flip <= maxBarsFromFlip` AND'd into the Score-mode branch only. `bars_since_flip` (`var int`) resets to 0 on the flip bar itself and increments every bar after, tracked alongside the existing `trend_start_price` reset so both stay in sync with the same flip event. Trend mode is deliberately unaffected — it already fires directly on the flip bar by construction, so there's nothing to constrain. This is independent of (and complements) the Stretch gate, which only actually penalizes extension when `gateOn = true`; `maxBarsFromFlip` works regardless of gate mode. Calibrate using the Extended Metrics "Bars From Flip" row.
 
 **Two P&L tracking systems (independent):**
-- *Live dashboard P&L* — tracks position from `pnl_entry_price`. "Last Signal" mode resets entry on every new signal; "First Signal" mode resets only on direction change, so compounding same-direction signals track the full run.
+- *Live dashboard P&L* — tracks position from `pnl_entry_price`, reset on every new `signal_buy`/`signal_sell`. Since strict alternation (see Signal Blocking above) means there's only ever one signal per held direction, entry always corresponds to the signal that opened the current position — a separate "First Signal" reset-on-direction-change mode is no longer meaningful and was removed.
 - *Signal P&L History* — shown on BUY/SELL labels; calculates `%` move from `last_signal_price` to current close using the previous signal's direction. Completely separate state from dashboard P&L.
 
 **P&L exits are Fixed %-only:** `signal_profit`/`signal_loss` fire when `current_pnl` (computed from `pnl_entry_price`) crosses `±pnlTarget`.
