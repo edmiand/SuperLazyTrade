@@ -1,7 +1,7 @@
 //@version=6
 
 // Version
-string VERSION = "V1"
+string VERSION = "V2"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey
@@ -41,8 +41,8 @@ type TodSession
 // SIGNAL ANCHOR SELECTION
 //======================================================================
 grp_anchor = "📍 Signal Anchor"
-anchorMode = input.string("EMA Cross", "Signal Anchor", 
-     options = ["SuperTrend", "EMA Cross"],
+anchorMode = input.string("EMA Cross", "Signal Anchor",
+     options = ["SuperTrend", "EMA Cross", "SMA"],
      group = grp_anchor,
      tooltip = "SUPERTREND:\n" +
                "• Signals on SuperTrend flip (green ↔ red)\n" +
@@ -54,7 +54,12 @@ anchorMode = input.string("EMA Cross", "Signal Anchor",
                "• Faster entries, catches early momentum\n" +
                "• More responsive to price action\n" +
                "• Best for: NVDA, TSLA (fast movers), aggressive trading\n\n" +
-               "NOTE: Both use same scoring/gates for quality filtering")
+               "SMA:\n" +
+               "• Signals on price crossing a slow structural SMA\n" +
+               "• Slowest anchor — filters out intraday noise entirely\n" +
+               "• ATR buffer band + latched state kills whipsaw\n" +
+               "• Best for: choppy instruments, fewer/higher-conviction entries\n\n" +
+               "NOTE: All three use the same scoring/gates for quality filtering")
 
 // EMA Period Selection (only applies to EMA Cross mode)
 emaSlowPeriod = input.int(30, "EMA Slow Period",
@@ -97,6 +102,35 @@ atrLen_manual = input.int(7, "Manual ATR Length", minval = 5, maxval = 20, group
 
 factor_manual = input.float(2.0, "Manual Factor", minval = 1.0, maxval = 5.0, step = 0.1, group = grp_st,
      tooltip = "Only used when ATR Mode = MANUAL\nStandard range: 2.0-3.0")
+
+//======================================================================
+// SMA ANCHOR SETTINGS (only used when Signal Anchor = SMA)
+//======================================================================
+grp_sma = "📉 SMA Anchor"
+smaMode = input.string("AUTO", "SMA Length Mode",
+     options = ["AUTO", "MANUAL"],
+     group = grp_sma,
+     tooltip = "AUTO: SMA length set per asset profile\n" +
+               "• STOCK: 70\n" +
+               "• ETF / FUND: 90\n" +
+               "• FUTURES: 70\n" +
+               "• CRYPTO: 120\n" +
+               "• MARKET INDEX: 90\n\n" +
+               "MANUAL: use the Manual SMA Length below")
+
+smaLen_manual = input.int(70, "Manual SMA Length", minval = 10, maxval = 300, group = grp_sma,
+     tooltip = "Only used when SMA Length Mode = MANUAL\n" +
+               "70 on a 2-min chart ≈ 2.3 hours of price")
+
+smaBufferATR = input.float(0.25, "SMA Buffer (× ATR)", minval = 0.0, maxval = 2.0, step = 0.05,
+     group = grp_sma,
+     tooltip = "Neutral band around the SMA, measured in ATR(14).\n\n" +
+               "Bull latches only when close > SMA + buffer.\n" +
+               "Bear latches only when close < SMA - buffer.\n" +
+               "Inside the band the previous state is held (hysteresis).\n\n" +
+               "0.0 = raw price/SMA cross (noisy — many flips per session)\n" +
+               "0.25 = default, filters most chop\n" +
+               "0.50+ = very few flips, later entries")
 
 //======================================================================
 // ADAPTIVE SUPERTREND PARAMETER SELECTION
@@ -335,6 +369,7 @@ float ext_scale    = 2.5   // Overextension ATR Multiplier (default)
 float fuel_max     = 85.0  // ATR Fuel Limit (default)
 int   ema_max      = 20    // EMA Cascade max points (default)
 int   vwap_max     = 25    // VWAP Value max points (default)
+int   sma_len      = 70    // SMA anchor length, AUTO mode (default)
 string profile_name = "DEFAULT"
 
 // 3. Profile Assignment Logic
@@ -348,7 +383,8 @@ if asset_category == "MARKET"
     fuel_max := 80.0
     ema_max := 22    // EMA Cascade max points (default)
     vwap_max := 23    // VWAP Value max points (default)
-    
+    sma_len := 90     // Slower anchor — indices grind, few clean crosses
+
 else if asset_category == "FUND"
     profile_name := "ETF / FUND 📊"
     vwap_h_limit := 1.0
@@ -359,6 +395,7 @@ else if asset_category == "FUND"
     fuel_max := 75.0
     ema_max := 20    // EMA Cascade max points (default)
     vwap_max := 25    // VWAP Value max points (default)
+    sma_len := 90     // Smooth trends — longer average holds structure
 
 else if asset_category == "STOCK"
     profile_name := "STOCK 🚀"
@@ -370,6 +407,7 @@ else if asset_category == "STOCK"
     fuel_max := 85.0
     ema_max := 20    // EMA Cascade max points (default)
     vwap_max := 25    // VWAP Value max points (default)
+    sma_len := 70     // Source-script baseline — ~2.3h on a 2-min chart
 
 else if asset_category == "FUTURES"
     profile_name := "FUTURES ⚡"
@@ -381,6 +419,7 @@ else if asset_category == "FUTURES"
     fuel_max := 90.0
     ema_max := 30    // EMA Cascade max points (default)
     vwap_max := 15    // VWAP Value max points (default)
+    sma_len := 70     // Matches the CL/crude source script this was drawn from
 
 else if asset_category == "CRYPTO"
     profile_name := "CRYPTO 🪙"
@@ -392,6 +431,7 @@ else if asset_category == "CRYPTO"
     fuel_max := 95.0
     ema_max := 25    // EMA Cascade max points (default)
     vwap_max := 20    // VWAP Value max points (default)
+    sma_len := 120    // 24h trading — needs a much longer window per "session"
 
 else
     profile_name := "STANDARD STOCK 📈" // Defaults already set above
@@ -409,6 +449,12 @@ ema50 = ta.ema(close, 50)
 
 // Keep ema20 reference for Component 1 scoring (always uses 20)
 ema20 = ta.ema(close, 20)
+
+// SMA anchor — only drives signals when anchorMode == "SMA", but computed on
+// every bar like every other series here. AUTO takes the per-profile length
+// assigned above; MANUAL takes the user input.
+int smaLenActive = smaMode == "AUTO" ? sma_len : smaLen_manual
+smaAnchor = ta.sma(close, smaLenActive)
 
 // VWAP (Session-based - Component 2)
 vwap = ta.vwap(close)
@@ -580,11 +626,61 @@ bool ema_is_bear = ema9 < emaSlow
 bool ema_flip_up = ta.crossover(ema9, emaSlow) and barstate.isconfirmed
 bool ema_flip_down = ta.crossunder(ema9, emaSlow) and barstate.isconfirmed
 
-// Select active anchor based on user input
-bool is_bull = anchorMode == "SuperTrend" ? st_is_bull : ema_is_bull
-bool is_bear = anchorMode == "SuperTrend" ? st_is_bear : ema_is_bear
-bool trendUp = anchorMode == "SuperTrend" ? st_flip_up : ema_flip_up
-bool trendDown = anchorMode == "SuperTrend" ? st_flip_down : ema_flip_down
+// ANCHOR 3: SMA with ATR buffer band + latched state.
+//
+// A raw price/SMA cross whipsaws hard on a 2-min chart — price crosses a slow
+// average many times per session in chop, and in Trend mode trendUp fires the
+// signal directly off the flip. The buffer band (smaBufferATR x ATR-14) creates
+// a neutral zone that price must fully clear before the state changes.
+//
+// The state is LATCHED (var bool) rather than left neutral inside the band,
+// which matters downstream: several consumers are written as `is_bull ? .. : ..`
+// with no third case (dashboard trend row, SMA line color), so a bar where both
+// is_bull and is_bear were false would silently render as bearish. Latching
+// keeps the is_bull/is_bear contract strictly binary, exactly like the other
+// two anchors.
+//
+// Only updated on confirmed bars, so the state cannot flip intrabar and then
+// revert — same non-repainting guarantee the other two anchors carry.
+float sma_band = smaBufferATR * atr
+var bool sma_state_bull = true
+
+// Previous bar's latched state, captured BEFORE this bar's update below.
+// sma_state_bull is `var`, so at this point it still holds the value it ended
+// the previous bar with. This is deliberately not `sma_state_bull[1]`: that
+// reads na on bar 0, which would make the flip booleans na rather than false,
+// and nz() has no bool overload to default it with (CE10123).
+var bool sma_prev_bull = true
+sma_prev_bull := sma_state_bull
+
+if barstate.isconfirmed and not na(smaAnchor) and not na(sma_band)
+    if close > smaAnchor + sma_band
+        sma_state_bull := true
+    else if close < smaAnchor - sma_band
+        sma_state_bull := false
+    // inside the band: hold the previous state (hysteresis)
+
+bool sma_is_bull = sma_state_bull
+bool sma_is_bear = not sma_state_bull
+bool sma_flip_up = sma_state_bull and not sma_prev_bull and barstate.isconfirmed
+bool sma_flip_down = not sma_state_bull and sma_prev_bull and barstate.isconfirmed
+
+// Select active anchor based on user input.
+// NOTE: these are 3-way chains, not binary ternaries — a new anchor mode must
+// be added here explicitly or it silently inherits SuperTrend's behavior.
+bool is_bull = anchorMode == "SuperTrend" ? st_is_bull : anchorMode == "SMA" ? sma_is_bull : ema_is_bull
+bool is_bear = anchorMode == "SuperTrend" ? st_is_bear : anchorMode == "SMA" ? sma_is_bear : ema_is_bear
+bool trendUp = anchorMode == "SuperTrend" ? st_flip_up : anchorMode == "SMA" ? sma_flip_up : ema_flip_up
+bool trendDown = anchorMode == "SuperTrend" ? st_flip_down : anchorMode == "SMA" ? sma_flip_down : ema_flip_down
+
+// Price of whichever anchor line is currently plotted. Single source of truth
+// for BUY/SELL label anchoring and the dashboard Trend row — previously each of
+// those five sites carried its own binary ternary that treated "not EMA Cross"
+// as SuperTrend, which a third anchor would have silently fallen through to.
+float anchor_line_price = anchorMode == "SuperTrend" ? supertrend : anchorMode == "SMA" ? smaAnchor : ema9
+
+// Short label for the active anchor, used in the dashboard Trend row.
+string anchor_short = anchorMode == "SuperTrend" ? "ST" : anchorMode == "SMA" ? "SMA" : "EMA9"
 
 // Track anchor flip as reference point for Trend Extension tracking
 if (trendUp or trendDown)
@@ -1317,6 +1413,36 @@ plotshape(anchorMode == "EMA Cross" and showCircles and trendDown ? ema9 : na,
      size = size.tiny,
      color = color.red)
 
+// SMA Anchor Line (only when SMA mode active)
+// Colored by the latched state, with the ATR buffer band drawn either side so
+// the neutral zone that suppresses whipsaw flips is visible on the chart.
+color sma_color = is_bull ? color.green : color.red
+plot(anchorMode == "SMA" ? smaAnchor : na, "SMA Anchor",
+     color = sma_color, style = plot.style_line, linewidth = 3)
+
+smaUpper = plot(anchorMode == "SMA" and smaBufferATR > 0 ? smaAnchor + sma_band : na,
+     "SMA Buffer Upper", color = color.new(color.gray, 60), style = plot.style_line, linewidth = 1)
+smaLower = plot(anchorMode == "SMA" and smaBufferATR > 0 ? smaAnchor - sma_band : na,
+     "SMA Buffer Lower", color = color.new(color.gray, 60), style = plot.style_line, linewidth = 1)
+
+fill(smaUpper, smaLower,
+     color = showBg and anchorMode == "SMA" ? color.new(color.gray, 90) : color.new(color.white, 100))
+
+// SMA Flip Circles (only in SMA mode)
+plotshape(anchorMode == "SMA" and showCircles and trendUp ? smaAnchor : na,
+     title = "SMA Bullish Flip",
+     location = location.absolute,
+     style = shape.circle,
+     size = size.tiny,
+     color = color.green)
+
+plotshape(anchorMode == "SMA" and showCircles and trendDown ? smaAnchor : na,
+     title = "SMA Bearish Flip",
+     location = location.absolute,
+     style = shape.circle,
+     size = size.tiny,
+     color = color.red)
+
 //======================================================================
 // BUY/SELL LABELS WITH ANCHOR-AWARE POSITIONING
 //======================================================================
@@ -1326,8 +1452,8 @@ if signal_buy and showLabels
     if showSignalPnL and not na(signal_pnl)
         label_text += "\n" + str.tostring(signal_pnl, "+#.##;-#.##") + "%"
     
-    // Use ema9 price in EMA Cross mode, supertrend in SuperTrend mode
-    float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
+    // Anchor-aware label position (see anchor_line_price definition)
+    float label_price = anchor_line_price
     
     label.new(bar_index, label_price, label_text,
          yloc = yloc.price,
@@ -1342,8 +1468,8 @@ if signal_sell and showLabels
     if showSignalPnL and not na(signal_pnl)
         label_text += "\n" + str.tostring(signal_pnl, "+#.##;-#.##") + "%"
     
-    // Use ema9 price in EMA Cross mode, supertrend in SuperTrend mode
-    float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
+    // Anchor-aware label position (see anchor_line_price definition)
+    float label_price = anchor_line_price
     
     label.new(bar_index, label_price, label_text,
          yloc = yloc.price,
@@ -1357,8 +1483,8 @@ if signal_sell and showLabels
 //======================================================================
 if signal_profit and enablePnL
     string label_text = "PROFIT +" + str.tostring(pnlTarget, "#.#") + "%"
-    // Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
-    float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
+    // Anchor-aware label position (see anchor_line_price definition)
+    float label_price = anchor_line_price
     string label_style = label.style_label_up
 
     if signal_buy
@@ -1380,8 +1506,8 @@ if signal_profit and enablePnL
 
 if signal_loss and enablePnL
     string label_text = "LOSS -" + str.tostring(pnlTarget, "#.#") + "%"
-    // Use ema9 in EMA Cross mode, supertrend in SuperTrend mode
-    float label_price = anchorMode == "EMA Cross" ? ema9 : supertrend
+    // Anchor-aware label position (see anchor_line_price definition)
+    float label_price = anchor_line_price
     string label_style = label.style_label_down
 
     if signal_buy
@@ -1454,9 +1580,8 @@ if showDash and barstate.islast
     // mode, where that line is neither plotted nor driving any signal.
     string trend_state = is_bull ? "BULLISH 🔼" : "BEARISH 🔽"
     color trend_color = is_bull ? color.lime : color.orange
-    float anchor_price = anchorMode == "EMA Cross" ? ema9 : supertrend
-    table.cell(d, 0, row, anchorMode == "EMA Cross" ? "Trend (EMA9)" : "Trend (ST)", text_color = color.white, text_halign = text.align_left, text_size = size.small)
-    table.cell(d, 1, row, trend_state + " @ " + str.tostring(anchor_price, format.mintick), text_color = trend_color, text_size = size.small)
+    table.cell(d, 0, row, "Trend (" + anchor_short + ")", text_color = color.white, text_halign = text.align_left, text_size = size.small)
+    table.cell(d, 1, row, trend_state + " @ " + str.tostring(anchor_line_price, format.mintick), text_color = trend_color, text_size = size.small)
     row += 1
     
     // Profile Name
@@ -1472,6 +1597,10 @@ if showDash and barstate.islast
             anchor_display += " AUTO"
         else
             anchor_display += " MANUAL"
+    else if anchorMode == "SMA"
+        anchor_display := "SMA (" + str.tostring(smaLenActive) + ")"
+        anchor_display += smaMode == "AUTO" ? " AUTO" : " MANUAL"
+        anchor_display += " ±" + str.tostring(smaBufferATR, "#.##") + "A"
     else  // EMA Cross
         anchor_display := "EMA Cross (9/" + str.tostring(emaSlowPeriod) + ")"
     

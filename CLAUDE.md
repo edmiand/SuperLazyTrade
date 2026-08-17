@@ -20,24 +20,25 @@ The script is organized into sequential sections (read top-to-bottom, order matt
 
 1. **Constants** — Gate penalty values, dashboard sizing (`DASHBOARD_MAX_ROWS = 28`)
 2. **Inputs** — All user-configurable parameters grouped by function:
-   - `grp_anchor`: Signal Anchor (SuperTrend / EMA Cross) + EMA slow period
+   - `grp_anchor`: Signal Anchor (SuperTrend / EMA Cross / SMA) + EMA slow period
+   - `grp_sma`: SMA anchor length mode (AUTO / MANUAL), manual length, ATR buffer multiplier
    - `grp_st`: SuperTrend ATR mode (AUTO / MANUAL) + manual ATR/Factor overrides
    - `grp_sig`: Signal timing, quality filter, min scores, RTH session filter, gate enforcement
    - `grp_pnl`: P&L exit signals, target %, signal P&L history
    - `grp_success`: Success rate tracking, rolling window size
    - `grp_vis`: Dashboard visibility, extended metrics, circles, background
-3. **Adaptive SuperTrend params** — AUTO mode selects ATR length and factor based on `syminfo.type` and ticker; MANUAL overrides. See [Auto SuperTrend Config Table](#auto-supertrend-config-table).
+3. **Adaptive SuperTrend params** — AUTO mode selects ATR length and factor based on `syminfo.type` and ticker; MANUAL overrides. See [Auto SuperTrend Config Table](#auto-supertrend-config-table). The SMA anchor length is *not* set here — it is assigned per profile in the next section (`sma_len`), because it keys on `asset_category` rather than ticker.
 4. **Asset profile assignment** — A `switch` on `syminfo.type` first computes `asset_category` (STOCK/FUND/FUTURES/CRYPTO/MARKET); a separate `if/else if` chain keyed on `asset_category` then sets `profile_name` and all threshold variables used throughout scoring. See [Profile Parameters Table](#profile-parameters-table).
 5. **Core indicator calculations** — EMAs (9, `emaSlow`=user-choice 20 or 30, 20 fixed for scoring, 50), VWAP, ATR(14), RSI(14), ADX(14,14), MACD(12,26,9), relative volume (`rvolMode`: Time-of-Day default, Rolling 20-bar SMA fallback/alternative — see [Time-of-Day Relative Volume](#key-design-decisions))
 6. **Market regime detection** — Squeeze state (BB(20,2) inside KC(20,1.5×ATR)), squeeze release + bias, stretch factor (EMA distance + trend move since flip), velocity override (ADX>35 rising 3 bars), ATR fuel gauge (session range vs daily ATR-14)
-7. **Dual-anchor trend classification** — SuperTrend vs EMA Cross mode; `is_bull`/`is_bear`/`trendUp`/`trendDown` unify both anchors behind a single interface. `trend_start_price` updated on every `trendUp`/`trendDown`.
+7. **Tri-anchor trend classification** — SuperTrend, EMA Cross, or SMA mode; `is_bull`/`is_bear`/`trendUp`/`trendDown` unify all three anchors behind a single interface, and `anchor_line_price`/`anchor_short` unify the *display* side. `trend_start_price` updated on every `trendUp`/`trendDown`. See [SMA Anchor](#sma-anchor).
 8. **Scoring engine** — 5 components summed to `raw_score` (capped at 100). Max theoretical total = 105 across all profiles. See [Scoring Components](#scoring-components).
 9. **Risk gates** — 4 gates calculate penalties; applied to `raw_score` → `final_score` only when `gateOn = true`; always shown as warnings regardless. See [Risk Gates](#risk-gates).
 10. **Signal generation** — Signals are non-repainting; `barstate.isconfirmed` guards all flip conditions. In "Score" signal-timing mode, alternating BUY/SELL is enforced via `b_fired`/`s_fired` flags; in "Trend" mode, signals fire directly off `trendUp`/`trendDown` and never check these flags — alternation there falls out of the flip-bar semantics instead. Flags reset when anchor direction changes (`is_bull` vs `is_bull[1]`), not just on flip bars. RTH filter via `time(timeframe.period, "0930-1600:23456")` — `in_session`/`session_just_opened` are computed in their own **RTH Session Window** section placed *before* P&L exit tracking, because the session-open reset must flatten stale position state before `current_pnl` is evaluated on that same bar. Score-mode signals can also be constrained to fire only within `maxBarsFromFlip` bars of the anchor flip (default 0 = disabled); Trend mode is unaffected.
 11. **P&L tracking** — Two independent systems: (a) live dashboard P&L using `pnl_entry_price`/`pnl_direction`, reset on every new signal and flattened at RTH session open; (b) signal-to-signal `signal_pnl` history shown on labels. PROFIT/LOSS exit triggers are Fixed %-only: `current_pnl` vs `±pnlTarget`. Target/stop resolution (`target_reached`/`stop_reached`) is tracked internally regardless of `enablePnL`; `enablePnL` only gates the visible `signal_profit`/`signal_loss`.
 12. **Success rate tracking** — Rolling arrays (`buy_results`/`sell_results`), capped at `maxSignalsToTrack`; every signal is scored won/lost when the next opposite-direction signal closes it — won only if the target was reached during the entry, lost otherwise.
-13. **Visuals** — Conditional plots: SuperTrend line (green/red) or EMA9 dynamic line (green/red) based on active anchor; flip circles at transition bars; BUY/SELL labels anchored to active line price.
-14. **Dashboard** — `table.new` at `position.bottom_right` with `DASHBOARD_MAX_ROWS = 28`; rendered only on `barstate.islast`. The table is `var`, so every render starts with `table.clear(d, 0, 0, 1, DASHBOARD_MAX_ROWS - 1)` — without it, rows written by the variable-length gate-detail loop persist after a gate deactivates and keep showing a stale warning. The gate detail loop is the last section written; it has an explicit `if row >= DASHBOARD_MAX_ROWS: break` guard because it is the only variable-length section. All preceding rows are bounded by design. The first data row reports the **active anchor** (`Trend (EMA9)` or `Trend (ST)`) and its own price — not the SuperTrend band unconditionally.
+13. **Visuals** — Conditional plots, one branch per anchor: SuperTrend line (green/red), EMA9 dynamic line (green/red), or SMA line (green/red) plus its grey ATR buffer band; flip circles at transition bars; BUY/SELL labels anchored to `anchor_line_price`.
+14. **Dashboard** — `table.new` at `position.bottom_right` with `DASHBOARD_MAX_ROWS = 28`; rendered only on `barstate.islast`. The table is `var`, so every render starts with `table.clear(d, 0, 0, 1, DASHBOARD_MAX_ROWS - 1)` — without it, rows written by the variable-length gate-detail loop persist after a gate deactivates and keep showing a stale warning. The gate detail loop is the last section written; it has an explicit `if row >= DASHBOARD_MAX_ROWS: break` guard because it is the only variable-length section. All preceding rows are bounded by design. The first data row reports the **active anchor** (`Trend (EMA9)`, `Trend (ST)`, or `Trend (SMA)`) and its own price — not the SuperTrend band unconditionally. Both that row and the four BUY/SELL label sites read the shared `anchor_line_price`/`anchor_short` globals rather than each re-deriving the anchor.
 15. **Alerts** — Four `alertcondition` calls with plaintext messages: `"BUY"`, `"SELL"`, `"PROFIT"`, `"LOSS"`.
 
 ---
@@ -111,17 +112,47 @@ All 5 components sum to `raw_score`, capped at 100. Component maxes vary by prof
 
 ---
 
+## SMA Anchor
+
+Third `anchorMode` option. Selected when `anchorMode = "SMA"`.
+
+**Length** (`sma_len`) is assigned per asset profile in the profile block — see the `sma_len` column in the [Profile Parameters Table](#profile-parameters-table) — and resolved to `smaLenActive` by `smaMode`:
+
+- `smaMode = "AUTO"` (default) → per-profile `sma_len`
+- `smaMode = "MANUAL"` → `smaLen_manual` (default 70, range 10–300)
+
+**Flip semantics — ATR buffer band with latched state.** A raw `ta.crossover(close, sma)` whipsaws badly on a 2-min chart, and in Trend mode `trendUp` fires the signal directly off the flip, so the raw cross is not usable as-is. Instead:
+
+```
+sma_band = smaBufferATR × ATR(14)          // default 0.25, range 0.0–2.0
+close > smaAnchor + sma_band  → latch BULL
+close < smaAnchor - sma_band  → latch BEAR
+inside the band               → hold previous state
+```
+
+`sma_state_bull` is a `var bool` initialized `true`, updated only under `barstate.isconfirmed` (so the state cannot flip intrabar and revert — same non-repainting guarantee as the other two anchors) and guarded by `not na(smaAnchor) and not na(sma_band)` for the warmup bars before the SMA is valid.
+
+**Why latched rather than a true neutral zone:** several downstream consumers are written as `is_bull ? … : …` with no third case (dashboard trend row, anchor line color). If `is_bull` and `is_bear` were both `false` inside the band, those sites would silently render bearish. Latching preserves the strictly-binary `is_bull`/`is_bear` contract that SuperTrend and EMA Cross both satisfy. `sma_is_bear` is defined as `not sma_state_bull`, never as an independent test.
+
+Flips derive from the latch by comparing against `sma_prev_bull`, a second `var bool` assigned from `sma_state_bull` *before* the update block each bar. This is deliberately not `sma_state_bull[1]`: that reads `na` on bar 0, making the flip booleans `na` rather than `false`, and `nz()` has no bool overload to default it with (`CE10123` — `nz` expects a numeric `source`). Because flips come from the latch, `trend_start_price` and `bars_since_flip` stay correct with no extra work, and `maxBarsFromFlip` applies to SMA mode in Score mode exactly as it does to EMA Cross.
+
+Setting `smaBufferATR = 0` degrades to a raw price/SMA cross (the source behavior) — expect substantially more flips.
+
+**Scoring interaction to be aware of:** the SMA anchor overlaps conceptually with Component 1 (EMA Cascade), which already scores price against `ema20`/`ema50`. In SMA mode the anchor is partly being scored by a related measure. Nothing breaks — the periods differ and the other four components are independent — but SMA-mode scores skew slightly higher on trend continuation, which matters when comparing win rates across anchor modes.
+
+---
+
 ## Profile Parameters Table
 
 All threshold variables are assigned once per bar based on `syminfo.type`. The `switch` expression maps every possible `syminfo.type` value: `"stock"` → STOCK, `"fund"` → FUND, `"futures"` → FUTURES, `"crypto"` → CRYPTO, and **everything else** (index, forex, unknown) → MARKET via the switch default. The MARKET profile is the true catch-all; there is no separate DEFAULT profile in the code.
 
-| Profile | `vwap_h_limit` | `vwap_e_limit` | `adx_min` | `rvol_gate` | `ext_scale` | `fuel_max` | `ema_max` | `vwap_max` |
-|---------|----------------|----------------|-----------|-------------|-------------|------------|-----------|------------|
-| MARKET INDEX 🏦 *(index, forex, unknown)* | 0.7% | 1.5% | 25 | 1.0× | 2.0 ATR | 80% | 22 | 23 |
-| ETF / FUND 📊 | 1.0% | 2.0% | 18 | 1.0× | 2.2 ATR | 75% | 20 | 25 |
-| STOCK 🚀 | 1.8% | 3.5% | 20 | 1.2× | 3.0 ATR | 85% | 20 | 25 |
-| FUTURES ⚡ | 1.5% | 3.0% | 15 | 0.6× | 2.5 ATR | 90% | 30 | 15 |
-| CRYPTO 🪙 | 3.0% | 6.0% | 28 | 0.6× | 4.0 ATR | 95% | 25 | 20 |
+| Profile | `vwap_h_limit` | `vwap_e_limit` | `adx_min` | `rvol_gate` | `ext_scale` | `fuel_max` | `ema_max` | `vwap_max` | `sma_len` |
+|---------|----------------|----------------|-----------|-------------|-------------|------------|-----------|------------|-----------|
+| MARKET INDEX 🏦 *(index, forex, unknown)* | 0.7% | 1.5% | 25 | 1.0× | 2.0 ATR | 80% | 22 | 23 | 90 |
+| ETF / FUND 📊 | 1.0% | 2.0% | 18 | 1.0× | 2.2 ATR | 75% | 20 | 25 | 90 |
+| STOCK 🚀 | 1.8% | 3.5% | 20 | 1.2× | 3.0 ATR | 85% | 20 | 25 | 70 |
+| FUTURES ⚡ | 1.5% | 3.0% | 15 | 0.6× | 2.5 ATR | 90% | 30 | 15 | 70 |
+| CRYPTO 🪙 | 3.0% | 6.0% | 28 | 0.6× | 4.0 ATR | 95% | 25 | 20 | 120 |
 
 ---
 
@@ -150,7 +181,9 @@ Selected when `atrMode = "AUTO"` (default). Futures matching uses the first 2 ch
 
 **Profile-adaptive scoring:** `ema_max` and `vwap_max` vary by asset type (e.g., FUTURES gets `ema_max=30`, `vwap_max=15`), so the raw 100-point maximum is assembled differently per profile. All profiles sum to 105 before the cap. When modifying component weights, check all five profiles.
 
-**Dual-anchor unification:** After anchor selection, all downstream logic uses `is_bull`, `is_bear`, `trendUp`, `trendDown` — never `st_*` or `ema_*` directly. The EMA slow period (`emaSlowPeriod` = 20 or 30, default 30) affects cross detection but NOT Component 1 scoring, which always uses `ema20`. Score mode and Trend mode are both gated through the same `is_bull`/`is_bear` flags.
+**Tri-anchor unification:** After anchor selection, all downstream logic uses `is_bull`, `is_bear`, `trendUp`, `trendDown` — never `st_*`, `ema_*`, or `sma_*` directly. This is what makes adding an anchor cheap: the scoring engine, all 4 risk gates, signal generation, both P&L systems, win-rate tracking, and `maxBarsFromFlip` required **zero** changes when the SMA anchor was added. The EMA slow period (`emaSlowPeriod` = 20 or 30, default 30) affects cross detection but NOT Component 1 scoring, which always uses `ema20`. Score mode and Trend mode are both gated through the same `is_bull`/`is_bear` flags.
+
+The anchor selectors are **3-way ternary chains**, not binary. A fourth anchor must be added to all four selectors plus `anchor_line_price` and `anchor_short` explicitly — the chains end in the EMA Cross branch, so an unhandled mode silently inherits EMA Cross behavior rather than erroring. Display sites (`plot`, `plotshape`, `fill`, dashboard `anchor_display`) all use explicit `anchorMode == "..."` equality, so an unhandled mode draws nothing instead of mislabeling.
 
 **Non-repainting:** *Signals* are non-repainting — `barstate.isconfirmed` guards every flip condition and all signal assignments. The daily ATR (`atr_14`) uses `request.security(..., lookahead_off)`, which reads the *developing* daily bar, so `fuel_used` drifts upward through the session. This is **not** display-only — it feeds Gate 3 (ATR Fuel) and therefore `final_score` and signal generation. It is still non-repainting: `lookahead_off` guarantees the value is computed from data available at that bar, so a historical bar recomputes to the same number it had live.
 
@@ -195,6 +228,7 @@ Common failure modes when editing this script:
 - **`time()` session strings use ET for US equities** but the exchange timezone for other instruments. `"0930-1600:23456"` is hardcoded against ET — this is correct for US stocks but not appropriate for crypto or 24h futures without user awareness (see RTH filter note above).
 - **`str.split` includes empty strings** if the delimiter appears at the start/end of the string. `gate_message` is built with a trailing space, so `str.split(gate_message, " ")` always yields a trailing empty token. The word-wrap loop never turns this into a visible row, though: an empty word either merges into the current line as a harmless trailing space (line stays under the 30-char cap) or, if a line break is forced first, becomes `current_line := ""`, which the final `if current_line != "": array.push(...)` guard then excludes. No blank row is ever pushed to `gate_lines`.
 - **`var table` cells persist across renders** — `table.cell` only overwrites the cells you write this bar. Any row written on a previous render and *not* rewritten keeps its old text forever. The dashboard therefore calls `table.clear(...)` before writing, because the gate-detail loop writes a variable number of rows.
+- **`nz()` has no bool overload** — `nz(someBool[1], someBool)` fails with `CE10123` (`nz` expects a numeric `source`). To default a `bool`'s previous value, keep a second `var bool` and assign it from the first *before* the current bar's update, rather than reading `[1]`. `sma_prev_bull` in the SMA anchor does this; note that `[1]` on a `var bool` is `na` on bar 0, so an unguarded history read makes derived booleans `na` rather than `false`.
 - **Arrays cannot nest** — `array<array<float>>` does not compile. To build a 2D/ragged structure (e.g. `TodSession` in the Time-of-Day RVOL feature), wrap the inner array in a user-defined `type` and use `array<TodSession>` instead.
 - **Functions cannot reassign a value-type global variable** (`float`/`int`/`bool`/`string`), even one declared with `var` — attempting `pnl_entry_price := close` inside a `set_pnl_entry(dir) =>` function fails to compile with `CE10088 Cannot modify global variable`. Only reference types (`array`/`matrix`/`map`/UDT) can be mutated from inside a function, and only via a parameter (e.g. `add_result(array<bool> arr, ...)` calling `array.push(arr, ...)`). This is why the P&L entry/re-arm logic (`pnl_entry_price`, `pnl_direction`, `pnl_exit_fired`) stays inlined at each of the 8 signal branches instead of being factored into a helper function — wrapping that state in a UDT to allow a helper would touch every read site across the file.
 
@@ -218,8 +252,9 @@ No test runner exists. After any edit, verify manually in this order:
 12. **Stale dashboard rows:** let a gate go active (gate-detail rows appear), then wait for it to clear → confirm the Gate Details rows disappear entirely rather than freezing on the last warning text
 13. **`enablePnL` independence:** turn `Enable P&L Exit Signals` OFF with Success Rate Tracking ON → confirm PROFIT/LOSS labels and alerts stop, but BUY/SELL win rates keep resolving normally (they must NOT collapse to 0%)
 14. **Session-open flatten:** with the RTH filter ON, hold a position into the close → confirm at the next 9:30 open the dashboard P&L reads `—` and no PROFIT/LOSS label fires off the overnight gap
-15. **Anchor row:** switch to EMA Cross → confirm the first dashboard row reads `Trend (EMA9)` with the EMA9 price; switch to SuperTrend → `Trend (ST)` with the band price
-16. **Entry freshness:** in Score mode, set `Max Bars From Flip = 5` → confirm no BUY/SELL fires on bar 6+ after a flip (watch the "Bars From Flip" Extended Metrics row to confirm the count itself resets to 0 on each flip bar); confirm Trend mode is unaffected by the same setting; confirm worst case (Success Rate + Extended Metrics + all 4 gates on) still shows no dashboard row overflow with `DASHBOARD_MAX_ROWS = 28`
+15. **Anchor row:** switch to EMA Cross → confirm the first dashboard row reads `Trend (EMA9)` with the EMA9 price; switch to SuperTrend → `Trend (ST)` with the band price; switch to SMA → `Trend (SMA)` with the SMA price, and the Signal Anchor row reads e.g. `SMA (70) AUTO ±0.25A`
+16. **SMA anchor:** switch anchor to SMA → confirm the SMA line plots (not SuperTrend/EMA9) with a grey buffer band either side, flip circles appear only where the latched state changes, and the dashboard Trend row reads `Trend (SMA)`; set `SMA Buffer = 0` → confirm flips become noticeably more frequent (raw cross); set `SMA Buffer = 1.0` → confirm flips become rare and price must clear the band before the line changes color; confirm no flip ever fires on a bar where price sits inside the band
+17. **Entry freshness:** in Score mode, set `Max Bars From Flip = 5` → confirm no BUY/SELL fires on bar 6+ after a flip (watch the "Bars From Flip" Extended Metrics row to confirm the count itself resets to 0 on each flip bar); confirm Trend mode is unaffected by the same setting; confirm worst case (Success Rate + Extended Metrics + all 4 gates on) still shows no dashboard row overflow with `DASHBOARD_MAX_ROWS = 28`
 
 ---
 
