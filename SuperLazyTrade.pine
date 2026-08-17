@@ -546,6 +546,16 @@ tod_slot_idx += 1
 // Relative Volume: Rolling 20-bar (always computed, used as fallback) +
 // Time-of-Day (used when selected and sufficient history exists)
 vol_ma20 = ta.sma(volume, 20)
+// The `: 1.0` fallback is what makes volume-less feeds (index symbols such as
+// TVC:NDQ or TSX:TSX, where volume is na/0) behave sanely: rel_vol becomes a
+// neutral 1.0 instead of na. Two consequences depend on that exact value —
+//   1. Component 3 awards its `>= 1.0` tier (5 pts) rather than 0.
+//   2. Gate 4 stays quiet, because `volume_is_dead` tests `rel_vol < rvol_gate`
+//      and MARKET's rvol_gate is also exactly 1.0.
+// That second one is a knife-edge tie, not a design: raising MARKET's rvol_gate
+// above 1.0 would silently pin a permanent -25 liquidity penalty on every
+// volume-less index. If you tune that value, add an explicit volume-availability
+// check here instead of relying on this fallback.
 float rel_vol_rolling = vol_ma20 > 0 ? volume / vol_ma20 : 1.0
 float rel_vol_tod = tod_data_sufficient and not na(tod_vol_avg) and tod_vol_avg > 0 ? volume / tod_vol_avg : na
 
