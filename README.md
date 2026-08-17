@@ -37,6 +37,29 @@ Raw scores are capped at 100. EMA and VWAP weights vary by asset profile so all 
 |--------|---------|----------|
 | EMA Cross (default) | EMA9 crosses slow EMA (20 or 30) | NVDA, TSLA, fast movers |
 | SuperTrend | SuperTrend band flip | ETFs, trending markets |
+| SMA | Price clears a slow SMA by an ATR buffer | Choppy instruments, fewer/higher-conviction entries |
+
+**SMA anchor detail.** Slowest of the three. Instead of a raw price/SMA cross — which whipsaws badly intraday — the state only flips when price fully clears an ATR-scaled buffer band, and is held inside it:
+
+```
+close > SMA + (buffer x ATR-14)  -> BULLISH
+close < SMA - (buffer x ATR-14)  -> BEARISH
+inside the band                  -> hold previous state
+```
+
+SMA length is set per asset profile in AUTO mode, with a MANUAL override:
+
+| Profile | SMA Length |
+|---------|-----------|
+| STOCK | 70 |
+| FUTURES | 70 |
+| ETF / FUND | 90 |
+| MARKET INDEX | 90 |
+| CRYPTO | 120 |
+
+Buffer defaults to `0.25 x ATR`. Set it to `0` for a raw price/SMA cross (many more flips); raise it toward `1.0` for rarer, later entries. The band is drawn on the chart in grey so you can see the zone that is suppressing flips.
+
+> The AUTO lengths and the default buffer are reasoned starting points, not values calibrated against live results. Compare flip frequency across anchors using the Extended Metrics "Bars From Flip" row before trusting them.
 
 ---
 

@@ -1,7 +1,7 @@
 //@version=6
 
 // Version
-string VERSION = "V2"
+string VERSION = "V3"
 indicator("SuperLazyTrade " + VERSION, overlay = true, max_labels_count = 300)
 
 // By: @dmandrey
@@ -666,8 +666,9 @@ bool sma_flip_up = sma_state_bull and not sma_prev_bull and barstate.isconfirmed
 bool sma_flip_down = not sma_state_bull and sma_prev_bull and barstate.isconfirmed
 
 // Select active anchor based on user input.
-// NOTE: these are 3-way chains, not binary ternaries — a new anchor mode must
-// be added here explicitly or it silently inherits SuperTrend's behavior.
+// NOTE: these are 3-way chains, not binary ternaries. The chains END in the
+// EMA Cross branch, so a new anchor mode that is not added here explicitly
+// silently inherits EMA CROSS behavior — it does not error.
 bool is_bull = anchorMode == "SuperTrend" ? st_is_bull : anchorMode == "SMA" ? sma_is_bull : ema_is_bull
 bool is_bear = anchorMode == "SuperTrend" ? st_is_bear : anchorMode == "SMA" ? sma_is_bear : ema_is_bear
 bool trendUp = anchorMode == "SuperTrend" ? st_flip_up : anchorMode == "SMA" ? sma_flip_up : ema_flip_up
@@ -680,7 +681,22 @@ bool trendDown = anchorMode == "SuperTrend" ? st_flip_down : anchorMode == "SMA"
 float anchor_line_price = anchorMode == "SuperTrend" ? supertrend : anchorMode == "SMA" ? smaAnchor : ema9
 
 // Short label for the active anchor, used in the dashboard Trend row.
+// Same fallthrough caveat as the selectors above — an unhandled mode labels
+// itself "EMA9" rather than erroring.
 string anchor_short = anchorMode == "SuperTrend" ? "ST" : anchorMode == "SMA" ? "SMA" : "EMA9"
+
+// Is the active anchor warmed up enough to be trusted?
+//
+// SuperTrend and both EMAs produce usable values from the first bars, but
+// ta.sma returns na until smaLenActive bars exist (70-120 depending on
+// profile). sma_state_bull is initialized true and its update block is skipped
+// while smaAnchor is na, so WITHOUT this guard the SMA anchor reports
+// is_bull = true for that entire warm-up window regardless of actual price
+// direction. In the default configuration (Score timing, maxBarsFromFlip = 0)
+// that is enough on its own to fire a BUY on score alone — in a downtrend —
+// seeding the win-rate array with an entry the anchor never endorsed and
+// drawing its label at a na price.
+bool anchor_ready = anchorMode == "SMA" ? not na(smaAnchor) : true
 
 // Track anchor flip as reference point for Trend Extension tracking
 if (trendUp or trendDown)
@@ -1236,16 +1252,16 @@ if sigTime == "Trend"
     // Fire at anchor flip + quality check. b_fired/s_fired block a same-
     // direction signal even across multiple flips (e.g. BUY -> flip bear
     // with no SELL -> flip bull again) until the opposite side actually fires.
-    signal_buy  := in_session and trendUp and passes_quality_filter(final_score, minScoreBuy) and not b_fired
-    signal_sell := in_session and trendDown and passes_quality_filter(final_score, minScoreSell) and not s_fired
+    signal_buy  := in_session and anchor_ready and trendUp and passes_quality_filter(final_score, minScoreBuy) and not b_fired
+    signal_sell := in_session and anchor_ready and trendDown and passes_quality_filter(final_score, minScoreSell) and not s_fired
 
 else  // "Score" mode
     // Fire when score crosses threshold
-    signal_buy  := in_session and entry_is_fresh and barstate.isconfirmed and is_bull and
+    signal_buy  := in_session and anchor_ready and entry_is_fresh and barstate.isconfirmed and is_bull and
                    passes_quality_filter(final_score, minScoreBuy) and
                    not b_fired
 
-    signal_sell := in_session and entry_is_fresh and barstate.isconfirmed and is_bear and
+    signal_sell := in_session and anchor_ready and entry_is_fresh and barstate.isconfirmed and is_bear and
                    passes_quality_filter(final_score, minScoreSell) and
                    not s_fired
 
@@ -1578,10 +1594,16 @@ if showDash and barstate.islast
     // Trend — reports the ACTIVE anchor. Previously this row was hardcoded to
     // "SuperTrend" and printed the SuperTrend band price even in EMA Cross
     // mode, where that line is neither plotted nor driving any signal.
-    string trend_state = is_bull ? "BULLISH 🔼" : "BEARISH 🔽"
-    color trend_color = is_bull ? color.lime : color.orange
+    // anchor_ready is false only while an SMA anchor is still warming up (chart
+    // has fewer bars than smaLenActive). Without this branch the row would read
+    // "BULLISH 🔼 @ NaN" off the latch's initial value and the na SMA price.
+    string trend_state = not anchor_ready ? "WARMING UP ⏳" : is_bull ? "BULLISH 🔼" : "BEARISH 🔽"
+    color trend_color = not anchor_ready ? color.gray : is_bull ? color.lime : color.orange
+    string trend_cell = not anchor_ready ?
+         trend_state + " (" + str.tostring(smaLenActive) + " bars)" :
+         trend_state + " @ " + str.tostring(anchor_line_price, format.mintick)
     table.cell(d, 0, row, "Trend (" + anchor_short + ")", text_color = color.white, text_halign = text.align_left, text_size = size.small)
-    table.cell(d, 1, row, trend_state + " @ " + str.tostring(anchor_line_price, format.mintick), text_color = trend_color, text_size = size.small)
+    table.cell(d, 1, row, trend_cell, text_color = trend_color, text_size = size.small)
     row += 1
     
     // Profile Name
