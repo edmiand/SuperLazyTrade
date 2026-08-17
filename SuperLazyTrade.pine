@@ -57,17 +57,17 @@ anchorMode = input.string("EMA Cross", "Signal Anchor",
                "NOTE: Both use same scoring/gates for quality filtering")
 
 // EMA Period Selection (only applies to EMA Cross mode)
-emaSlowPeriod = input.int(20, "EMA Slow Period", 
+emaSlowPeriod = input.int(30, "EMA Slow Period",
      options = [20, 30],
      group = grp_anchor,
      tooltip = "Select slow EMA period for EMA Cross mode:\n\n" +
-               "EMA 9/20 (Default):\n" +
+               "EMA 9/20 (Faster):\n" +
                "• Very responsive, more signals (5-10/session)\n" +
                "• Catches early momentum and breakouts\n" +
                "• Higher whipsaw risk in choppy markets\n" +
                "• Best for: NVDA, TSLA (fast movers)\n" +
-               "• Current results: SOXX 74% BUY / 54% SELL\n\n" +
-               "EMA 9/30 (Smoother):\n" +
+               "• Observed: SOXX 74% BUY / 54% SELL\n\n" +
+               "EMA 9/30 (Default — Smoother):\n" +
                "• More selective, fewer signals (3-7/session)\n" +
                "• Better trend filtering, rides moves longer\n" +
                "• Lower whipsaw risk (-40% reduction)\n" +
@@ -218,8 +218,8 @@ useSessionFilter = input.bool(true, "RTH Session Filter (9:30–4:00 PM ET)", gr
                "State resets at session open so the first RTH bar can fire\n" +
                "freely without carryover from overnight.")
 
-gateOn = input.bool(false, "Enable Risk Gates", group = grp_sig,
-     tooltip = "ENFORCEMENT MODE (ON): Gates apply penalties to score\n" +
+gateOn = input.bool(true, "Enable Risk Gates", group = grp_sig,
+     tooltip = "ENFORCEMENT MODE (ON, default): Gates apply penalties to score\n" +
                "ADVISORY MODE (OFF): Gates show warnings but don't affect score\n\n" +
                "RISK GATES ARE ALWAYS VISIBLE:\n" +
                "• ON → 'Gates: 🚧 SQUEEZE (-30)'\n" +
@@ -227,8 +227,13 @@ gateOn = input.bool(false, "Enable Risk Gates", group = grp_sig,
                "RISK GATES (4 total - pure risk filters):\n" +
                "1. Squeeze: -30 when BB inside KC (range-bound)\n" +
                "2. Stretch: -10/-20 when price extended from EMA20 or flip\n" +
-               "3. ATR Fuel: -25 when daily range >85% of ATR(14)\n" +
-               "4. Liquidity: -25 when RVOL<0.8 AND ADX choppy\n\n" +
+               "3. ATR Fuel: -25 when session range exceeds the profile's\n" +
+               "   fuel limit (75-95% of daily ATR-14, asset-dependent)\n" +
+               "4. Liquidity: -25 when RVOL is below the profile's RVOL\n" +
+               "   gate (0.6-1.2x, asset-dependent) AND ADX is choppy\n\n" +
+               "Default ON: Gates 1 (Squeeze) and 4 (Liquidity) directly\n" +
+               "suppress the low-ADX/range-bound chop entries that drove\n" +
+               "losing whipsaw signals in backtesting (see roadmap.md).\n\n" +
                "NOTE: Breakout bonus moved to Component 5 (always active)")
 
 rvolMode = input.string("Time-of-Day", "Relative Volume Mode",
@@ -420,7 +425,8 @@ bool adx_rising_2 = ta.rising(adx, 2)  // 2-bar: Setup Score ADX component
 
 
 // MACD (12/26/9 standard - for Component 5 momentum alignment)
-[macdLine, signalLine, _] = ta.macd(close, 12, 26, 9)
+// Only the MACD line is scored; signal/histogram are intentionally unused.
+[macdLine, _, _] = ta.macd(close, 12, 26, 9)
 
 // Relative Volume: computed after session-tracking (Time-of-Day RVOL
 // needs is_new_session, which is defined further below) — see rel_vol
@@ -464,27 +470,12 @@ bool is_high_velocity = adx > 35 and adx_rising_3
 var float session_high = na
 var float session_low = na
 
-// FIX #2: Detect new session start based on instrument type
-bool is_new_session = false
-
-if syminfo.type == "stock" or syminfo.type == "fund" or syminfo.type == "index"
-    // STOCKS/ETFS/INDEXES: Daily session reset (midnight boundary)
-    // Note: Measures full calendar day range for ATR Fuel calculation
-    is_new_session := ta.change(time("D")) != 0 or na(session_high[1])
-                      
-else if syminfo.type == "futures"
-    // FUTURES: Daily reset (6 PM ET session boundary approximated via daily change)
-    // Uses daily timeframe change which resets at futures session start (typically 6 PM previous day)
-    // This works because TradingView's daily bars for futures align with session boundaries
-    is_new_session := ta.change(time("D")) != 0 or na(session_high[1])
-                      
-else if syminfo.type == "crypto"
-    // CRYPTO: Daily reset at midnight UTC (standard for 24/7 markets)
-    is_new_session := ta.change(time("D")) != 0 or na(session_high[1])
-                      
-else
-    // OTHER INSTRUMENTS: Daily reset at midnight
-    is_new_session := ta.change(time("D")) != 0 or na(session_high[1])
+// Detect new session start. Every instrument type uses the same daily-bar
+// boundary — TradingView's "D" bars already align to each instrument's own
+// session start (midnight for stocks/ETFs/indices and crypto, ~6 PM ET for
+// futures), so no per-type branching is needed here. (This previously existed
+// as four if/else branches with identical bodies.)
+bool is_new_session = ta.change(time("D")) != 0 or na(session_high[1])
 
 // Reset or update session range
 if is_new_session
@@ -989,12 +980,34 @@ var string last_signal_type = "NONE"
 var bool has_previous_signal = false
 
 //======================================================================
+// RTH SESSION WINDOW
+//======================================================================
+// Defined here (ahead of P&L exit tracking) because the session-open reset
+// must clear stale position state BEFORE current_pnl / PROFIT / LOSS are
+// evaluated on the session-open bar itself.
+bool in_session       = not useSessionFilter or not na(time(timeframe.period, "0930-1600:23456"))
+bool prev_in_session   = not na(time(timeframe.period, "0930-1600:23456")[1])
+bool session_just_opened = useSessionFilter and in_session and not prev_in_session
+
+//======================================================================
 // P&L EXIT TRACKING
 //======================================================================
 // State tracking for PROFIT/LOSS exit signals
 var float pnl_entry_price = na          // Entry price for current position
 var string pnl_direction = "NONE"       // "BUY" or "SELL" or "NONE"
 var bool pnl_exit_fired = false         // Has PROFIT/LOSS fired for this entry?
+var string pnl_exit_type = "NONE"       // Direction of the entry an exit closed
+
+// Flatten at RTH session open. The win-rate tracker already closes any
+// carried-over entry at this boundary (see SIGNAL GENERATION), so leaving
+// pnl_entry_price/pnl_direction live here would let the previous session's
+// entry price fire a spurious PROFIT/LOSS label + alert against the opening
+// gap, and would show the dashboard a position the tracker considers closed.
+if session_just_opened
+    pnl_entry_price := na
+    pnl_direction := "NONE"
+    pnl_exit_fired := false
+    pnl_exit_type := "NONE"
 
 // Calculate current P&L for exit tracking
 float current_pnl = 0.0
@@ -1007,20 +1020,21 @@ else if pnl_direction == "SELL" and not na(pnl_entry_price)
 bool target_hit = current_pnl >= pnlTarget
 bool stop_hit = current_pnl <= -pnlTarget
 
-// Check if P&L target/stop reached (only fire if not already fired for this entry)
-bool hit_profit = enablePnL and not pnl_exit_fired and target_hit
-bool hit_loss = enablePnL and not pnl_exit_fired and stop_hit
+// Target/stop resolution is tracked INTERNALLY regardless of enablePnL, on a
+// confirmed bar, and only once per entry. Win-rate tracking reads these — if
+// they were gated on enablePnL, turning off "Enable P&L Exit Signals" (a
+// display toggle) would silently make every tracked signal score as a loss
+// and pin both win rates at 0%.
+bool target_reached = not pnl_exit_fired and target_hit and barstate.isconfirmed
+bool stop_reached   = not pnl_exit_fired and stop_hit and barstate.isconfirmed
 
-// Fire P&L exit signals (confirmed bar only)
-bool signal_profit = hit_profit and barstate.isconfirmed
-bool signal_loss = hit_loss and barstate.isconfirmed
+// Visible PROFIT/LOSS exit signals (labels + alerts) — display-gated.
+bool signal_profit = target_reached and enablePnL
+bool signal_loss   = stop_reached and enablePnL
 
-// Track exit type for label placement
-var string pnl_exit_type = "NONE"
-
-// When exit signal fires, mark as fired but DON'T reset position
+// When the target/stop resolves, mark as fired but DON'T reset position
 // (continue tracking live P&L until the next opposite signal resets entry)
-if signal_profit or signal_loss
+if target_reached or stop_reached
     pnl_exit_type := pnl_direction
     pnl_exit_fired := true
     // Note: pnl_direction and pnl_entry_price remain unchanged
@@ -1082,16 +1096,15 @@ calc_win_rate(array<bool> arr, bool enabled) =>
 var bool b_fired = false
 var bool s_fired = false
 
-// RTH session filter: true when current bar is inside the configured session window
-bool in_session       = not useSessionFilter or not na(time(timeframe.period, "0930-1600:23456"))
-bool prev_in_session  = not na(time(timeframe.period, "0930-1600:23456")[1])
-
+// in_session / session_just_opened are defined earlier (RTH SESSION WINDOW),
+// ahead of P&L exit tracking so the same session-open boundary also flattens
+// the carried-over position state.
+//
 // Reset fired flags at session open so first RTH bar fires without overnight carryover.
 // An entry still open from the prior session (never closed by an opposite
 // signal) would otherwise be silently dropped from win-rate tracking once
 // b_fired/s_fired unblock a fresh same-direction signal — score and close
 // it here first, same as a normal opposite-signal close would.
-bool session_just_opened = useSessionFilter and in_session and not prev_in_session
 if session_just_opened
     b_fired := false
     s_fired := false
@@ -1158,10 +1171,12 @@ if showSignalPnL and has_previous_signal and not na(last_signal_price)
 // (alongside buy_results/sell_results) so the RTH session-open reset can
 // also close out a carried-over entry before this section runs.
 
+// Reads target_reached (not signal_profit) so win-rate stays correct when the
+// PROFIT/LOSS display toggle (enablePnL) is off.
 if enableSuccessRate
-    if signal_profit and pnl_direction == "BUY"
+    if target_reached and pnl_direction == "BUY"
         buy_won_this_entry := true
-    if signal_profit and pnl_direction == "SELL"
+    if target_reached and pnl_direction == "SELL"
         sell_won_this_entry := true
 
     // The opposite signal closes the prior entry — score it now.
@@ -1403,9 +1418,14 @@ if showDash and barstate.islast
     if gate4_liquidity
         active_gate_count += 1
 
-    var table d = table.new(position.bottom_right, 2, DASHBOARD_MAX_ROWS, 
+    var table d = table.new(position.bottom_right, 2, DASHBOARD_MAX_ROWS,
          bgcolor = color.new(color.black, 0), border_width = 1)
-    
+
+    // The table is `var`, so cells persist across renders. The gate-details
+    // block is variable-length: when a gate deactivates, its rows would keep
+    // displaying last render's (now false) warning. Wipe every row first.
+    table.clear(d, 0, 0, 1, DASHBOARD_MAX_ROWS - 1)
+
     // Header
     string header_with_pnl = "SuperLazyTrade " + VERSION + " | PnL " + pnl_text
     string fixed_header = header_with_pnl + str.substring(DASH_WIDTH, 0, math.max(0, 40 - str.length(header_with_pnl)))
@@ -1419,11 +1439,14 @@ if showDash and barstate.islast
     
     int row = 1
 
-    // SuperTrend
-    string st_status = is_bull ? "BULLISH 🔼" : "BEARISH 🔽"
-    color st_color = is_bull ? color.lime : color.orange
-    table.cell(d, 0, row, "SuperTrend", text_color = color.white, text_halign = text.align_left, text_size = size.small)
-    table.cell(d, 1, row, st_status + " @ " + str.tostring(supertrend, format.mintick), text_color = st_color, text_size = size.small)
+    // Trend — reports the ACTIVE anchor. Previously this row was hardcoded to
+    // "SuperTrend" and printed the SuperTrend band price even in EMA Cross
+    // mode, where that line is neither plotted nor driving any signal.
+    string trend_state = is_bull ? "BULLISH 🔼" : "BEARISH 🔽"
+    color trend_color = is_bull ? color.lime : color.orange
+    float anchor_price = anchorMode == "EMA Cross" ? ema9 : supertrend
+    table.cell(d, 0, row, anchorMode == "EMA Cross" ? "Trend (EMA9)" : "Trend (ST)", text_color = color.white, text_halign = text.align_left, text_size = size.small)
+    table.cell(d, 1, row, trend_state + " @ " + str.tostring(anchor_price, format.mintick), text_color = trend_color, text_size = size.small)
     row += 1
     
     // Profile Name

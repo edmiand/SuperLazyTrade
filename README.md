@@ -28,8 +28,8 @@ Raw scores are capped at 100. EMA and VWAP weights vary by asset profile so all 
 | 3. ATR Fuel | −25 | Session range > profile limit % of daily ATR |
 | 4. Liquidity | −25 | RVOL low AND ADX choppy |
 
-**Gates OFF (default/recommended):** Warnings display in dashboard but do not affect score.
-**Gates ON:** Penalties subtracted from final score before signal generation.
+**Gates ON (default/recommended):** Penalties subtracted from final score before signal generation.
+**Gates OFF:** Warnings display in dashboard but do not affect score.
 
 ### Signal Anchors
 
@@ -50,10 +50,10 @@ Raw scores are capped at 100. EMA and VWAP weights vary by asset profile so all 
 - **Chart:** 2-minute timeframe
 - **Assets:** NVDA, TSLA, SPY, QQQ, SOXX, Silver Futures
 - **Signal Anchor:** EMA Cross
-- **EMA Slow Period:** 20 (fast) or 30 (smoother)
+- **EMA Slow Period:** 30 (smoother, default) or 20 (faster, more whipsaw risk)
 - **Signal Timing:** Score mode
 - **Min Score:** 50 BUY / 50 SELL
-- **Risk Gates:** OFF
+- **Risk Gates:** ON (default — suppresses chop/squeeze/low-liquidity entries; see `roadmap.md`)
 - **Relative Volume Mode:** Time-of-Day (default)
 - **Max Bars From Flip:** 0 (disabled by default; Score mode only)
 
@@ -104,21 +104,23 @@ SuperTrend ATR length and factor also auto-select per instrument in AUTO mode (s
 ### P&L Tracking
 - Entry resets on every new BUY/SELL signal (there's only ever one signal per held direction, thanks to strict alternation — see Key Design Decisions)
 - **Fixed % target:** ±1.0% default (adjustable); fires PROFIT/LOSS exit labels and alerts
+- Position state is flattened at the 9:30 RTH open (when the session filter is on), so an overnight gap can't fire an exit against yesterday's entry price
 
 ### Win-Rate Tracking
-- **BUY Win Rate / SELL Win Rate:** every signal is scored when the next opposite-direction signal closes it — win only if PROFIT fired during the entry, loss otherwise (explicit LOSS exit, or no target ever hit); tracked as separate rolling windows
+- **BUY Win Rate / SELL Win Rate:** every signal is scored when the next opposite-direction signal closes it — win only if the ±target was reached during the entry, loss otherwise (stop hit, or no target ever hit); tracked as separate rolling windows
+- Independent of `Enable P&L Exit Signals` — that toggle only hides the PROFIT/LOSS labels and alerts; win rates keep resolving either way
 
 ---
 
 ## Key Design Decisions
 
-**Non-repainting:** All signals confirmed on `barstate.isconfirmed`. Daily ATR uses `lookahead_off` — display can flicker intrabar but no signal ever repaints.
+**Non-repainting:** All signals confirmed on `barstate.isconfirmed`. Daily ATR uses `lookahead_off`, so the ATR Fuel reading climbs through the session (it feeds Gate 3, not just the display) but a historical bar always recomputes to the value it had live — no signal ever repaints.
 
 **Dual-anchor unification:** After anchor selection, all downstream logic uses `is_bull`/`is_bear`/`trendUp`/`trendDown`. The EMA slow period affects cross detection only — Component 1 always scores against EMA20.
 
 **Signal blocking (strict alternation):** Once a BUY fires, no further BUY can fire — in either Trend or Score mode — until a SELL actually fires, regardless of how many trend flips happen in between. Flags only clear on the opposite signal firing or at RTH session open (only when the session filter is on). P&L tracking keeps running the whole time, unaffected by this gate.
 
-**Gate vs advisory:** `gateOn = false` (default) shows gate warnings but does not subtract from score. Component 5C (Squeeze Release) is always active regardless of gate mode.
+**Gate vs advisory:** `gateOn = true` (default) subtracts gate penalties from score, suppressing chop/squeeze/low-liquidity entries. `gateOn = false` shows gate warnings only. Component 5C (Squeeze Release) is always active regardless of gate mode.
 
 **Time-of-Day RVOL:** Removes the U-shaped intraday volume bias of a trailing SMA by comparing each bar to the historical average for its own bar-slot.
 

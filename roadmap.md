@@ -56,9 +56,31 @@ win rate alone can mislead (e.g. tightening filters could shrink both
 losing AND winning trade count/size). Worth instrumenting before picking
 a fix.
 
+## Applied (2026-08-15)
+
+Two default-value changes, no new logic — the fastest lever available
+using code that already existed:
+
+- **`gateOn` default `false` → `true`** (Enable Risk Gates). Gate 1
+  (Squeeze, −30) and Gate 4 (Liquidity, −25) directly target the
+  09:30–10:30 chop regime from the reviewed chart — low-ADX,
+  range-bound conditions now get penalized out of the score before a
+  signal can fire, instead of only showing as a warning.
+- **`emaSlowPeriod` default `20` → `30`** (EMA Slow Period). The
+  tooltip's own documented comparison (fewer signals, ~40% less
+  whipsaw risk, better SELL win rates) targets the same whipsaw
+  cluster directly.
+
+Neither change touches the strict-alternation lockout behind the
+missed-trend failure mode (11:30–16:00) — that requires #1 (hard
+regime gate before signal generation) or #3 (pyramiding/re-entry
+redesign) below, which are architecture changes, not default tweaks.
+Re-baseline win rate against these two new defaults before deciding
+whether further work is still needed.
+
 ## Next Step
 
-Not yet decided — leaning toward starting with #1 (regime/chop gate) and
-#2 (opening-range exclusion) as the cheapest, most surgical fixes that
-directly address what's visible in the reviewed chart, before considering
-the larger #3 redesign.
+Re-measure win rate with the new defaults (Risk Gates ON, EMA Slow
+Period 30) on the same SOXX 2-min chart. If the missed-trend problem
+persists, revisit #1 (regime/chop hard gate) and #2 (opening-range
+exclusion) as the next cheapest fixes, before the larger #3 redesign.
